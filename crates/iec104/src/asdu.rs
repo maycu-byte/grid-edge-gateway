@@ -62,13 +62,8 @@ pub struct Quality {
 }
 
 impl Quality {
-    pub const GOOD: Quality = Quality {
-        overflow: false,
-        blocked: false,
-        substituted: false,
-        not_topical: false,
-        invalid: false,
-    };
+    pub const GOOD: Quality =
+        Quality { overflow: false, blocked: false, substituted: false, not_topical: false, invalid: false };
 
     pub fn invalid() -> Self {
         Quality { invalid: true, ..Self::GOOD }
@@ -198,22 +193,10 @@ impl Element {
                 time: time_at(1)?,
             },
             13 => Element::Float { value: f32_at(0), quality: Quality::from_bits(b[4], true) },
-            36 => Element::FloatTime {
-                value: f32_at(0),
-                quality: Quality::from_bits(b[4], true),
-                time: time_at(5)?,
-            },
+            36 => Element::FloatTime { value: f32_at(0), quality: Quality::from_bits(b[4], true), time: time_at(5)? },
             70 => Element::EndOfInit { coi: b[0] },
-            45 => Element::SingleCommand {
-                on: b[0] & 1 != 0,
-                select: b[0] & 0x80 != 0,
-                qualifier: (b[0] >> 2) & 0x1F,
-            },
-            50 => Element::SetpointFloat {
-                value: f32_at(0),
-                select: b[4] & 0x80 != 0,
-                qualifier: b[4] & 0x7F,
-            },
+            45 => Element::SingleCommand { on: b[0] & 1 != 0, select: b[0] & 0x80 != 0, qualifier: (b[0] >> 2) & 0x1F },
+            50 => Element::SetpointFloat { value: f32_at(0), select: b[4] & 0x80 != 0, qualifier: b[4] & 0x7F },
             100 => Element::Interrogation { qoi: b[0] },
             103 => Element::ClockSync { time: time_at(0)? },
             _ => unreachable!("size() filtered unsupported types"),
@@ -244,9 +227,14 @@ pub enum AsduError {
     Truncated,
     /// The type is valid on the wire but not implemented here. `raw` holds the
     /// full ASDU so the station can mirror it with cause 44 (unknown type).
-    UnsupportedType { type_id: u8, raw: Vec<u8> },
+    UnsupportedType {
+        type_id: u8,
+        raw: Vec<u8>,
+    },
     /// The cause octet holds a value this implementation does not know.
-    UnsupportedCause { raw: Vec<u8> },
+    UnsupportedCause {
+        raw: Vec<u8>,
+    },
 }
 
 impl Asdu {
@@ -287,8 +275,7 @@ impl Asdu {
         let type_id = b[0];
         let sequence = b[1] & 0x80 != 0;
         let count = (b[1] & 0x7F) as usize;
-        let size = Element::size(type_id)
-            .ok_or_else(|| AsduError::UnsupportedType { type_id, raw: b.to_vec() })?;
+        let size = Element::size(type_id).ok_or_else(|| AsduError::UnsupportedType { type_id, raw: b.to_vec() })?;
         let cause = Cause::from_u8(b[2] & 0x3F).ok_or_else(|| AsduError::UnsupportedCause { raw: b.to_vec() })?;
         let expected = if sequence { 6 + 3 + count * size } else { 6 + count * (3 + size) };
         if b.len() < expected {
@@ -371,7 +358,12 @@ mod tests {
 
     #[test]
     fn setpoint_select_bit_and_negative_mirror() {
-        let cmd = Asdu::single(Cause::Activation, 1, 5001, Element::SetpointFloat { value: 60.0, select: true, qualifier: 0 });
+        let cmd = Asdu::single(
+            Cause::Activation,
+            1,
+            5001,
+            Element::SetpointFloat { value: 60.0, select: true, qualifier: 0 },
+        );
         let bytes = cmd.encode();
         assert_eq!(*bytes.last().unwrap(), 0x80);
         let reply = Asdu::decode(&bytes).unwrap().mirror(Cause::UnknownObjectAddress, true);
@@ -400,7 +392,8 @@ mod tests {
 
     #[test]
     fn rejects_truncated_objects() {
-        let bytes = Asdu::single(Cause::Spontaneous, 1, 1, Element::Float { value: 1.0, quality: Quality::GOOD }).encode();
+        let bytes =
+            Asdu::single(Cause::Spontaneous, 1, 1, Element::Float { value: 1.0, quality: Quality::GOOD }).encode();
         assert_eq!(Asdu::decode(&bytes[..bytes.len() - 1]), Err(AsduError::Truncated));
     }
 }

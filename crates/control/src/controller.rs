@@ -4,7 +4,7 @@
 //! last decisions), so the gateway, the browser demo and the tests all run
 //! exactly the same code.
 
-use crate::rules::{three_phase_current_a, three_phase_kw, SteuVE, EV_MIN_CURRENT_A};
+use crate::rules::{EV_MIN_CURRENT_A, SteuVE, three_phase_current_a, three_phase_kw};
 
 /// Where the DSO's feed-in limit is measured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,9 +295,8 @@ impl Controller {
     /// exact value is impossible, go to the next lower possible one).
     fn allocate(&mut self, t_s: f64, budget_kw: f64, r: &Readings) -> (Vec<f64>, Vec<f64>) {
         let cfg = &self.cfg;
-        let waiting: Vec<usize> = (0..cfg.chargers.len())
-            .filter(|&i| r.chargers.get(i).is_some_and(|c| c.online && c.car_waiting))
-            .collect();
+        let waiting: Vec<usize> =
+            (0..cfg.chargers.len()).filter(|&i| r.chargers.get(i).is_some_and(|c| c.online && c.car_waiting)).collect();
 
         if budget_kw.is_infinite() {
             let currents = cfg.chargers.iter().map(|c| c.max_current_a).collect();

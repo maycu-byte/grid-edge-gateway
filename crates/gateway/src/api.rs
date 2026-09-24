@@ -6,8 +6,8 @@
 
 use std::path::PathBuf;
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -23,7 +23,11 @@ struct Api {
     frames: broadcast::Sender<FrameLog>,
 }
 
-pub fn router(snapshot: watch::Receiver<Snapshot>, frames: broadcast::Sender<FrameLog>, web_root: Option<PathBuf>) -> Router {
+pub fn router(
+    snapshot: watch::Receiver<Snapshot>,
+    frames: broadcast::Sender<FrameLog>,
+    web_root: Option<PathBuf>,
+) -> Router {
     let app = Router::new()
         .route("/api/snapshot", get(get_snapshot))
         .route("/api/ws", get(ws))

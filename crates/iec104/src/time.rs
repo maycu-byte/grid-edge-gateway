@@ -45,10 +45,7 @@ impl Cp56Time2a {
     /// Milliseconds since the Unix epoch, interpreting the tag as UTC.
     pub fn to_unix_ms(&self) -> i64 {
         let days = days_from_civil(2000 + self.year as i64, self.month as i64, self.day as i64);
-        days * 86_400_000
-            + self.hour as i64 * 3_600_000
-            + self.minute as i64 * 60_000
-            + self.millisecond as i64
+        days * 86_400_000 + self.hour as i64 * 3_600_000 + self.minute as i64 * 60_000 + self.millisecond as i64
     }
 
     pub fn encode(&self, out: &mut Vec<u8>) {

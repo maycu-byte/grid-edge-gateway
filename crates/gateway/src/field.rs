@@ -10,11 +10,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use devices::maps::{evse, heat_pump, regs_to_u32};
-use devices::sunspec::{self, controls, inverter, meter, nameplate, ModelLocation};
+use devices::sunspec::{self, ModelLocation, controls, inverter, meter, nameplate};
 use tokio::sync::watch;
 use tokio::time::timeout;
-use tokio_modbus::client::{Context, Reader, Writer};
 use tokio_modbus::Slave;
+use tokio_modbus::client::{Context, Reader, Writer};
 use tracing::{info, warn};
 
 use crate::config::{Charger, Config, Device, HeatPump};
@@ -165,14 +165,20 @@ where
 pub fn spawn_all(cfg: &Config, state: Shared, setpoints: watch::Receiver<control::Setpoints>, period: Duration) {
     for (i, dev) in cfg.inverters.iter().enumerate() {
         let (state, sp) = (state.clone(), setpoints.clone());
-        let lost = { let s = state.clone(); move || s.lock().unwrap().inverters[i] = Slot::default() };
+        let lost = {
+            let s = state.clone();
+            move || s.lock().unwrap().inverters[i] = Slot::default()
+        };
         tokio::spawn(supervise(format!("inverter{i}"), dev.clone(), lost, move |ctx| {
             inverter_session(ctx, i, state.clone(), sp.clone(), period)
         }));
     }
     {
         let st = state.clone();
-        let lost = { let s = state.clone(); move || s.lock().unwrap().meter_kw = Slot::default() };
+        let lost = {
+            let s = state.clone();
+            move || s.lock().unwrap().meter_kw = Slot::default()
+        };
         tokio::spawn(supervise("meter".into(), cfg.meter.clone(), lost, move |ctx| {
             meter_session(ctx, st.clone(), period)
         }));
@@ -180,7 +186,10 @@ pub fn spawn_all(cfg: &Config, state: Shared, setpoints: watch::Receiver<control
     for (i, c) in cfg.chargers.iter().enumerate() {
         let (state, sp, c) = (state.clone(), setpoints.clone(), c.clone());
         let dev = Device { address: c.address, unit: c.unit };
-        let lost = { let s = state.clone(); move || s.lock().unwrap().chargers[i] = Slot::default() };
+        let lost = {
+            let s = state.clone();
+            move || s.lock().unwrap().chargers[i] = Slot::default()
+        };
         tokio::spawn(supervise(format!("charger{i}"), dev, lost, move |ctx| {
             charger_session(ctx, i, c.clone(), state.clone(), sp.clone(), period)
         }));
@@ -188,7 +197,10 @@ pub fn spawn_all(cfg: &Config, state: Shared, setpoints: watch::Receiver<control
     for (i, h) in cfg.heat_pumps.iter().enumerate() {
         let (state, sp, h) = (state.clone(), setpoints.clone(), h.clone());
         let dev = Device { address: h.address, unit: h.unit };
-        let lost = { let s = state.clone(); move || s.lock().unwrap().heat_pumps[i] = Slot::default() };
+        let lost = {
+            let s = state.clone();
+            move || s.lock().unwrap().heat_pumps[i] = Slot::default()
+        };
         tokio::spawn(supervise(format!("heatpump{i}"), dev, lost, move |ctx| {
             heat_pump_session(ctx, i, h.clone(), state.clone(), sp.clone(), period)
         }));

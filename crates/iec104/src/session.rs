@@ -9,7 +9,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::apci::{seq_distance, Apdu, UFunction, SEQ_MODULO};
+use crate::apci::{Apdu, SEQ_MODULO, UFunction, seq_distance};
 use crate::asdu::{Asdu, AsduError};
 
 /// Protocol parameters, with the defaults recommended by the standard.
@@ -191,17 +191,20 @@ impl Session {
     /// Runs the timers. Call it regularly (every 100 ms is plenty).
     pub fn on_tick(&mut self, now: Instant) -> Result<(), Close> {
         if let Some(&oldest) = self.unacked.front()
-            && now.duration_since(oldest) >= self.cfg.t1 {
-                return Err(Close::AckTimeout);
-            }
+            && now.duration_since(oldest) >= self.cfg.t1
+        {
+            return Err(Close::AckTimeout);
+        }
         if let Some(sent) = self.test_sent
-            && now.duration_since(sent) >= self.cfg.t1 {
-                return Err(Close::TestTimeout);
-            }
+            && now.duration_since(sent) >= self.cfg.t1
+        {
+            return Err(Close::TestTimeout);
+        }
         if let Some(since) = self.unacked_rx_since
-            && now.duration_since(since) >= self.cfg.t2 {
-                self.transmit_s();
-            }
+            && now.duration_since(since) >= self.cfg.t2
+        {
+            self.transmit_s();
+        }
         if self.test_sent.is_none() && now.duration_since(self.last_rx) >= self.cfg.t3 {
             self.transmit(Apdu::U(UFunction::TestFrAct));
             self.test_sent = Some(now);

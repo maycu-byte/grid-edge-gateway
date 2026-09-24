@@ -23,7 +23,7 @@ use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::field::{FieldState, Slot};
-use crate::snapshot::{now_ms, ChargerView, DsoView, HeatPumpView, InverterView, Snapshot};
+use crate::snapshot::{ChargerView, DsoView, HeatPumpView, InverterView, Snapshot, now_ms};
 
 #[tokio::main]
 async fn main() {
@@ -180,7 +180,10 @@ fn collect(f: &FieldState, stale: Duration) -> (Readings, Views) {
             .map(|c| match c {
                 Some(c) => control::ChargerReading {
                     online: true,
-                    car_waiting: matches!(c.status, evse::STATUS_CONNECTED | evse::STATUS_CHARGING | evse::STATUS_FAILSAFE),
+                    car_waiting: matches!(
+                        c.status,
+                        evse::STATUS_CONNECTED | evse::STATUS_CHARGING | evse::STATUS_FAILSAFE
+                    ),
                     current_a: c.current_a,
                     power_kw: c.kw,
                     session_kwh: c.session_kwh,

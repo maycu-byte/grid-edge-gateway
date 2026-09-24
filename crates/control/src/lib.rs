@@ -7,5 +7,5 @@ pub mod rules;
 
 pub use controller::{
     ChargerReading, ChargerSpec, Controller, DsoCommands, Fallback, FeedInReference, HeatPumpReading, HeatPumpSpec,
-    Mode, Readings, SiteConfig, Setpoints, Status,
+    Mode, Readings, Setpoints, SiteConfig, Status,
 };

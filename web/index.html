@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grid Edge Gateway</title>
+<meta name="description" content="A Rust site controller between a German grid operator and a prosumer site: IEC 60870-5-104 towards the DSO, SunSpec Modbus towards the devices, §14a EnWG dimming and feed-in limits in between — running live in your browser as WebAssembly.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M9 1 3 9h4l-1 6 6-8H8z%22 fill=%22%232a78d6%22/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    color-scheme: light;
+    --ground: #f4f5f3; --surface: #fcfcfb; --sunk: #ecede9; --hair: #d9dad4;
+    --ink: #0f1311; --ink2: #4d524f; --ink3: #7c817d;
+    --s-grid: #2a78d6; --s-pv: #eb6834; --s-steuve: #1baf7a;
+    --good: #0c7a0c; --warn: #b36b00; --critical: #d03b3b; --accent: #2a78d6;
+    --dso: #4a3aa7;
+    --sans: "Public Sans", system-ui, "Segoe UI", sans-serif; --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground: #111312; --surface: #1a1c1b; --sunk: #232625; --hair: #313533;
+      --ink: #f1f3f1; --ink2: #c2c7c3; --ink3: #8e948f;
+      --s-grid: #3987e5; --s-pv: #d95926; --s-steuve: #199e70;
+      --good: #3fbf3f; --warn: #e0a030; --critical: #ef6a6a; --accent: #3987e5; --dso: #9085e9;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #111312; --surface: #1a1c1b; --sunk: #232625; --hair: #313533;
+    --ink: #f1f3f1; --ink2: #c2c7c3; --ink3: #8e948f;
+    --s-grid: #3987e5; --s-pv: #d95926; --s-steuve: #199e70;
+    --good: #3fbf3f; --warn: #e0a030; --critical: #ef6a6a; --accent: #3987e5; --dso: #9085e9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 16px/1.55 var(--sans); padding-inline: 16px; padding-block: 28px 64px; }
+  .wrap { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  h1 { font-size: clamp(1.8rem, 3.6vw, 2.5rem); line-height: 1.1; margin: 0; letter-spacing: -.02em; text-wrap: balance; }
+  h2 { font-size: .76rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink3); margin: 0 0 12px; font-weight: 600; }
+  h3 { font-size: 1.05rem; margin: 0 0 6px; }
+  p { margin: 0; color: var(--ink2); max-width: 76ch; }
+  header p { margin-top: 10px; font-size: 1.06rem; }
+  header .links { margin-top: 12px; display: flex; gap: 18px; flex-wrap: wrap; font-size: .95rem; }
+  a { color: var(--accent); }
+  .panel { background: var(--surface); border: 1px solid var(--hair); border-radius: 12px; padding: 18px 20px; min-width: 0; }
+  .mono { font-family: var(--mono); }
+
+  /* control strip */
+  .controls { display: grid; grid-template-columns: 1.1fr 1.3fr 1.5fr; gap: 16px 22px; align-items: end; }
+  @media (max-width: 960px) { .controls { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 560px) { .controls { grid-template-columns: 1fr; } }
+  .field { display: flex; flex-direction: column; gap: 6px; font-size: .86rem; font-weight: 600; min-width: 0; }
+  .field small { font-weight: 400; color: var(--ink3); }
+  .seg { display: flex; gap: 3px; background: var(--sunk); border-radius: 8px; padding: 3px; }
+  .seg button { flex: 1; border: 0; background: transparent; color: var(--ink2); font: inherit; font-weight: 400; padding: 7px 6px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  .seg button[aria-pressed=true] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+  .seg button.dso[aria-pressed=true] { color: var(--dso); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .dsobar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; font-size: .86rem; color: var(--ink2); border-bottom: 1px solid var(--hair); padding-bottom: 12px; margin-bottom: 2px; }
+  .dsobar .tag { font: 600 .72rem var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--dso); }
+  .clock { display: flex; align-items: center; gap: 10px; }
+  .clock b { font: 500 1.5rem/1 var(--mono); min-width: 5ch; }
+  .clock .play { border: 1px solid var(--hair); background: var(--surface); color: var(--ink); border-radius: 8px; width: 38px; height: 34px; cursor: pointer; font-size: 1rem; }
+
+  /* state */
+  .main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 20px; align-items: start; }
+  @media (max-width: 960px) { .main { grid-template-columns: 1fr; } }
+  .side { display: flex; flex-direction: column; gap: 14px; }
+  .mode { display: flex; gap: 12px; align-items: flex-start; }
+  .mode .icon { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: .9rem; }
+  .mode strong { display: block; font-size: 1.05rem; }
+  .mode span { font-size: .9rem; color: var(--ink2); }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: var(--sunk); border-radius: 8px; padding: 10px 12px; }
+  .stat b { display: block; font: 500 1.3rem/1.2 var(--mono); }
+  .stat span { font-size: .8rem; color: var(--ink3); }
+  .gauge { margin-top: 4px; }
+  .gauge .track { position: relative; height: 12px; background: var(--sunk); border-radius: 6px; overflow: hidden; }
+  .gauge .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--s-steuve); border-radius: 6px; transition: width .2s; }
+  .gauge .lim { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); }
+  .gauge .labels { display: flex; justify-content: space-between; font: .74rem var(--mono); color: var(--ink3); margin-top: 4px; }
+  .faults { display: flex; flex-wrap: wrap; gap: 6px; }
+  .faults button { border: 1px solid var(--hair); background: var(--surface); color: var(--ink2); border-radius: 16px; padding: 4px 11px; font: .82rem var(--sans); cursor: pointer; }
+  .faults button[aria-pressed=true] { border-color: var(--critical); color: var(--critical); font-weight: 600; }
+
+  /* chart */
+  .chart { position: relative; }
+  #chart { width: 100%; height: auto; display: block; overflow: visible; }
+  #chart text { font: 12px var(--sans); fill: var(--ink3); }
+  #chart .lbl { font-weight: 600; fill: var(--ink2); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: .84rem; color: var(--ink2); margin-bottom: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend i { width: 16px; height: 2px; display: inline-block; }
+  .legend i.dash { background: repeating-linear-gradient(90deg, var(--ink) 0 4px, transparent 4px 7px); }
+  .tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--surface); padding: 7px 10px; border-radius: 6px; font-size: .82rem; line-height: 1.45; white-space: nowrap; z-index: 5; display: none; }
+  .tip b { font-family: var(--mono); font-weight: 500; }
+
+  /* devices */
+  .devices { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 960px) { .devices { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .dev { background: var(--sunk); border-radius: 10px; padding: 12px 13px; font-size: .86rem; display: flex; flex-direction: column; gap: 6px; }
+  .dev header { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .dev header b { font-size: .92rem; }
+  .pill { font-size: .72rem; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--surface); color: var(--ink2); white-space: nowrap; }
+  .pill.charging { color: var(--good); } .pill.waiting { color: var(--warn); } .pill.failsafe, .pill.offline { color: var(--critical); }
+  .dev .big { font: 500 1.15rem var(--mono); }
+  .dev .sub { color: var(--ink3); font-size: .8rem; }
+  .soc { height: 6px; background: var(--surface); border-radius: 3px; overflow: hidden; }
+  .soc i { display: block; height: 100%; background: var(--s-steuve); }
+
+  /* protocol log */
+  .log { font: .8rem/1.5 var(--mono); max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
+  .log div { display: grid; grid-template-columns: 58px 92px minmax(0, 1fr); gap: 10px; padding: 2px 4px; border-radius: 4px; }
+  .log div.new { background: var(--sunk); }
+  .log .t { color: var(--ink3); }
+  .log .d-dso { color: var(--dso); font-weight: 500; }
+  .log .d-site { color: var(--ink2); }
+  .log .txt { overflow-wrap: anywhere; }
+  .log .hex { grid-column: 3; color: var(--ink3); font-size: .74rem; }
+  .loghead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .loghead label { font-size: .84rem; color: var(--ink2); display: flex; gap: 6px; align-items: center; }
+
+  /* explanation */
+  .cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+  .cols > div { background: var(--sunk); border-radius: 10px; padding: 14px 16px; }
+  .cols p { font-size: .93rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+  th, td { text-align: left; padding: 6px 10px 6px 0; border-top: 1px solid var(--hair); vertical-align: top; }
+  th { font-size: .76rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink3); border-top: 0; }
+  td.mono { white-space: nowrap; }
+  .scroll { overflow-x: auto; }
+  #arch { width: 100%; height: auto; display: block; max-width: 980px; }
+  #arch text { font: 13px var(--sans); fill: var(--ink); }
+  #arch .small { font-size: 11.5px; fill: var(--ink2); }
+  footer { color: var(--ink3); border-top: 1px solid var(--hair); padding-top: 16px; font-size: .9rem; }
+  .noscript { color: var(--critical); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Grid Edge Gateway</h1>
+    <p>A site controller in Rust that sits between a German grid operator and a commercial prosumer site. It speaks IEC 60870-5-104 to the operator's control centre and SunSpec Modbus to the inverters, chargers and heat pump, and in between it enforces §14a EnWG dimming and feed-in limits. What runs below is that code, compiled to WebAssembly.</p>
+    <div class="links"><a href="https://github.com/maycu-byte/grid-edge-gateway">Source code and README</a><a href="#how">How it works</a><a href="#points">IEC 104 point list</a></div>
+  </header>
+  <noscript><p class="noscript">This demo needs JavaScript and WebAssembly.</p></noscript>
+
+  <section class="panel controls" aria-label="DSO commands and simulation">
+    <div class="dsobar"><span class="tag">DSO control centre</span><span>You are the grid operator. Every button sends a real IEC 104 command to the site; the frames appear in the log below.</span></div>
+    <div class="field">§14a EnWG grid-oriented control <small>C_SC_NA_1 · IOA 5001</small>
+      <div class="seg" id="dim-seg">
+        <button data-v="off" aria-pressed="true">Normal</button>
+        <button data-v="on" class="dso" aria-pressed="false">Dim to Pmin</button>
+      </div>
+    </div>
+    <div class="field">Feed-in limit <small>C_SE_NC_1 · IOA 5002 · % of 120 kWp</small>
+      <div class="seg" id="feed-seg">
+        <button data-v="100" aria-pressed="true">100%</button>
+        <button data-v="60" class="dso" aria-pressed="false">60%</button>
+        <button data-v="30" class="dso" aria-pressed="false">30%</button>
+        <button data-v="0" class="dso" aria-pressed="false">0%</button>
+      </div>
+    </div>
+    <div class="field">Simulated day <small>spring day at a logistics depot</small>
+      <div class="clock">
+        <button class="play" id="play" aria-label="Pause">❚❚</button>
+        <b id="clock">--:--</b>
+        <div class="seg" id="speed-seg" style="flex:1">
+          <button data-v="60" aria-pressed="false">1 min/s</button>
+          <button data-v="300" aria-pressed="true">5 min/s</button>
+          <button data-v="900" aria-pressed="false">15 min/s</button>
+        </div>
+      </div>
+    </div>
+    <div class="field" style="grid-column: 1 / -1">Jump to a scene
+      <div class="seg" id="scene-seg">
+        <button data-v="11.5">11:30 · solar peak, try a feed-in limit</button>
+        <button data-v="17.6">17:36 · vans plug in, try §14a dimming</button>
+        <button data-v="6">06:00 · whole day</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="main">
+    <div class="panel chart">
+      <h2>Power at the depot, kW</h2>
+      <div class="legend" id="legend">
+        <span><i style="background:var(--s-grid)"></i>Grid connection (+ import, − export)</span>
+        <span><i style="background:var(--s-pv)"></i>PV output</span>
+        <span><i style="background:var(--s-steuve)"></i>Chargers + heat pump</span>
+        <span><i class="dash"></i>DSO limit in force</span>
+      </div>
+      <svg id="chart" viewBox="0 0 760 330" role="img" aria-label="Power over the simulated day"></svg>
+      <div class="tip" id="tip"></div>
+    </div>
+    <div class="side">
+      <div class="panel mode" id="mode"></div>
+      <div class="panel">
+        <h2>§14a: steuVE power drawn from the grid</h2>
+        <div class="gauge" id="gauge"><div class="track"><div class="fill"></div><div class="lim"></div></div><div class="labels"><span id="g-now">–</span><span id="g-lim">–</span></div></div>
+        <p style="font-size:.84rem;margin-top:8px">Pmin,14a = 0.4 × 14 kW heat pump + 4 × 0.65 × 4.2 kW = <b class="mono">16.52 kW</b> (BNetzA BK6-22-300). PV surplus may be used on top.</p>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="panel">
+        <h2>Fault injection</h2>
+        <div class="faults" id="faults">
+          <button data-d="meter" aria-pressed="false">Meter offline</button>
+          <button data-d="charger1" aria-pressed="false">Charger 2 offline</button>
+          <button data-d="heatpump0" aria-pressed="false">Heat pump offline</button>
+          <button data-d="inverter0" aria-pressed="false">Inverter 1 offline</button>
+        </div>
+        <p style="font-size:.84rem;margin-top:8px">The device stops answering Modbus. Watch the fallbacks: a charger drops to its own 6 A failsafe after 30 s, and without the meter the budget shrinks to Pmin.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Field devices (Modbus TCP) — setpoint written by the gateway → measured</h2>
+    <div class="devices" id="devices"></div>
+  </section>
+
+  <section class="panel">
+    <div class="loghead"><h2>IEC 60870-5-104 frames on the DSO link</h2><label><input type="checkbox" id="hex"> show raw bytes</label></div>
+    <div class="log" id="log" aria-live="off"></div>
+  </section>
+
+  <section class="panel" id="how">
+    <h2>How it works</h2>
+    <svg id="arch" viewBox="0 0 980 190" role="img" aria-label="Architecture: DSO control centre, gateway, field devices">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="currentColor" style="color:var(--ink2)"/></marker></defs>
+      <g style="color:var(--ink2)">
+        <rect x="10" y="40" width="200" height="110" rx="10" fill="var(--sunk)" stroke="var(--hair)"/>
+        <text x="110" y="74" text-anchor="middle" font-weight="600">DSO control centre</text>
+        <text x="110" y="98" text-anchor="middle" class="small">SCADA · Netzleitstelle</text>
+        <text x="110" y="120" text-anchor="middle" class="small">tested with c104 / lib60870</text>
+        <line x1="212" y1="95" x2="318" y2="95" stroke="currentColor" stroke-width="2" marker-start="url(#ar)" marker-end="url(#ar)"/>
+        <text x="265" y="82" text-anchor="middle" class="small">IEC 104</text>
+        <text x="265" y="116" text-anchor="middle" class="small">TLS, client certs</text>
+        <rect x="320" y="20" width="340" height="150" rx="10" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text x="490" y="46" text-anchor="middle" font-weight="600">grid-edge-gateway (Rust)</text>
+        <text x="340" y="76" class="small">iec104 — controlled station, sans-IO link layer</text>
+        <text x="340" y="100" class="small">control — §14a Pmin, allocation, feed-in limit, ramp</text>
+        <text x="340" y="124" class="small">field — SunSpec discovery, watchdogs, reconnect</text>
+        <text x="340" y="148" class="small">api — JSON / WebSocket for this dashboard</text>
+        <line x1="662" y1="95" x2="768" y2="95" stroke="currentColor" stroke-width="2" marker-start="url(#ar)" marker-end="url(#ar)"/>
+        <text x="715" y="82" text-anchor="middle" class="small">Modbus TCP</text>
+        <text x="715" y="116" text-anchor="middle" class="small">SunSpec</text>
+        <rect x="770" y="20" width="200" height="150" rx="10" fill="var(--sunk)" stroke="var(--hair)"/>
+        <text x="870" y="46" text-anchor="middle" font-weight="600">Depot devices</text>
+        <text x="790" y="76" class="small">2 × 60 kW PV inverters</text>
+        <text x="790" y="100" class="small">grid meter (SunSpec 203)</text>
+        <text x="790" y="124" class="small">4 × 22 kW chargers</text>
+        <text x="790" y="148" class="small">14 kW heat pump</text>
+      </g>
+    </svg>
+    <div class="cols" style="margin-top:14px">
+      <div><h3>Towards the DSO</h3><p>The gateway is an IEC 60870-5-104 controlled station, the protocol German DSOs require for telecontrol of plants from 100 kW. Commands are confirmed (or refused with a negative confirmation), measurements go out spontaneously with time tags, and the link runs over TLS with client certificates in the spirit of IEC 62351-3. The protocol stack is written from scratch and tested against lib60870.</p></div>
+      <div><h3>The control rules</h3><p>During §14a dimming the controllable devices may draw at least Pmin,14a from the grid; the EMS decides how to split it. Here the heat pump keeps 40% of its rating, as many cars as fit get the 6 A minimum, least-charged first, and PV surplus is added on top. After the signal ends, power returns over 5 minutes instead of in one step.</p></div>
+      <div><h3>Towards the devices</h3><p>Inverters and meter are found by walking the SunSpec model chain. Inverter limits are written without a revert timeout, so they stay in force if the gateway dies; chargers get a failsafe current of 6 A, which alone is below 4.2 kW. DSO commands are persisted, so a dimming survives a restart.</p></div>
+    </div>
+  </section>
+
+  <section class="panel" id="points">
+    <h2>IEC 104 point list · common address 1</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>IOA</th><th>Type</th><th>Direction</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">5001</td><td class="mono">C_SC_NA_1</td><td>DSO → site</td><td>§14a dimming ON / OFF</td></tr>
+        <tr><td class="mono">5002</td><td class="mono">C_SE_NC_1</td><td>DSO → site</td><td>Feed-in limit, % of installed PV (0–100; other values are refused)</td></tr>
+        <tr><td class="mono">1001</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Active power at the grid connection, kW (+ import)</td></tr>
+        <tr><td class="mono">1002</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>PV active power, kW</td></tr>
+        <tr><td class="mono">1003</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Controllable devices (steuVE), kW</td></tr>
+        <tr><td class="mono">1004</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>steuVE power drawn from the grid, kW — the quantity §14a limits</td></tr>
+        <tr><td class="mono">1005</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Pmin,14a of this site, kW</td></tr>
+        <tr><td class="mono">1006</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Feed-in limit in force, % (feedback of 5002)</td></tr>
+        <tr><td class="mono">1007</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>PV limit sent to the inverters, %</td></tr>
+        <tr><td class="mono">2001</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>§14a dimming active (feedback of 5001)</td></tr>
+        <tr><td class="mono">2002</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Gradual release in progress</td></tr>
+        <tr><td class="mono">2003</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Meter fallback (grid measurement lost)</td></tr>
+        <tr><td class="mono">2004</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Field device fault</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <footer>
+    Simulated site, synthetic data: 120 kWp rooftop PV, four 22 kW chargers, a 14 kW heat pump. The gateway also runs as a native binary against real Modbus TCP devices — see the README. Built by Michael Hiarley Silva Andrade · <a href="https://github.com/maycu-byte">github.com/maycu-byte</a>
+  </footer>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -98,7 +98,12 @@ mod tests {
 
     #[test]
     fn describes_a_setpoint_command() {
-        let asdu = Asdu::single(Cause::Activation, 1, 5002, Element::SetpointFloat { value: 60.0, select: false, qualifier: 0 });
+        let asdu = Asdu::single(
+            Cause::Activation,
+            1,
+            5002,
+            Element::SetpointFloat { value: 60.0, select: false, qualifier: 0 },
+        );
         let frame = Apdu::I { ns: 3, nr: 5, asdu: asdu.encode() }.encode();
         assert_eq!(describe(&frame), "I ns=3 nr=5 C_SE_NC_1 act CA=1 | IOA 5002 60.00");
         assert_eq!(describe(&Apdu::U(UFunction::StartDtAct).encode()), "U STARTDT act");

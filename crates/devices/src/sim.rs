@@ -4,7 +4,7 @@
 //! the gateway integration tests and the site simulator all see the same day.
 
 use crate::maps::{evse, heat_pump, regs_to_u32, u32_to_regs};
-use crate::sunspec::{self, common, controls, inverter, meter, nameplate, NI_INT16};
+use crate::sunspec::{self, NI_INT16, common, controls, inverter, meter, nameplate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeviceId {
@@ -159,8 +159,13 @@ impl SiteSim {
             cloud: 1.0,
             rng: seed.max(1),
         };
-        // Cars that arrived before the start are plugged in right away.
+        // Cars that arrived before the start are plugged in right away, and
+        // the inverters start at the output the sun allows (no ramp from 0).
         sim.step(0.0);
+        let solar = sim.solar_fraction();
+        for inv in &mut sim.inverters {
+            inv.output_kw = inv.rated_kw * solar;
+        }
         sim
     }
 
@@ -258,10 +263,11 @@ impl SiteSim {
             }
         }
 
-        // Heat pump: demand from outdoor temperature, capped by its limit.
+        // Heat pump: demand from outdoor temperature (never below what the
+        // compressor can modulate down to), capped by its limit.
         let outdoor = self.outdoor_c();
         for hp in &mut self.heat_pumps {
-            hp.demand_kw = (hp.rated_kw * ((16.0 - outdoor) / 20.0)).clamp(0.2 * hp.rated_kw, hp.rated_kw);
+            hp.demand_kw = (hp.rated_kw * ((16.0 - outdoor) / 20.0)).clamp(0.25 * hp.rated_kw, hp.rated_kw);
             hp.power_kw = if hp.limit_kw >= hp.min_kw { hp.demand_kw.min(hp.limit_kw) } else { 0.0 };
         }
     }

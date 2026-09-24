@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::{self, RootCertStore, ServerConfig};
-use tokio_rustls::TlsAcceptor;
 
 use crate::config::Tls;
 

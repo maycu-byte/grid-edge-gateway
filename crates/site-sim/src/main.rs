@@ -20,7 +20,7 @@ use std::time::Duration;
 use devices::sim::{DeviceId, Exception, SiteSim};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio_modbus::server::tcp::{accept_tcp_connection, Server};
+use tokio_modbus::server::tcp::{Server, accept_tcp_connection};
 use tokio_modbus::{ExceptionCode, Request, Response, SlaveRequest};
 
 type Shared = Arc<Mutex<SiteSim>>;
@@ -75,15 +75,13 @@ impl tokio_modbus::server::Service for DeviceService {
     fn call(&self, req: Self::Request) -> Self::Future {
         let mut sim = self.sim.lock().unwrap();
         let result = match req.request {
-            Request::ReadHoldingRegisters(addr, n) => {
-                sim.read(self.dev, addr, n).map(Response::ReadHoldingRegisters)
-            }
+            Request::ReadHoldingRegisters(addr, n) => sim.read(self.dev, addr, n).map(Response::ReadHoldingRegisters),
             Request::WriteSingleRegister(addr, v) => {
                 sim.write(self.dev, addr, &[v]).map(|_| Response::WriteSingleRegister(addr, v))
             }
-            Request::WriteMultipleRegisters(addr, values) => sim
-                .write(self.dev, addr, &values)
-                .map(|_| Response::WriteMultipleRegisters(addr, values.len() as u16)),
+            Request::WriteMultipleRegisters(addr, values) => {
+                sim.write(self.dev, addr, &values).map(|_| Response::WriteMultipleRegisters(addr, values.len() as u16))
+            }
             _ => return future::ready(Err(ExceptionCode::IllegalFunction)),
         };
         future::ready(match result {

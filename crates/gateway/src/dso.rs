@@ -23,10 +23,10 @@
 //! CP56Time2a time tag, so every point has exactly one type.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use iec104::asdu::{mirror_raw, AsduError};
+use iec104::asdu::{AsduError, mirror_raw};
 use iec104::connection::{self, Direction, Event};
 use iec104::describe::describe;
 use iec104::{Asdu, Cause, Cp56Time2a, Element, InformationObject, Quality};
@@ -34,7 +34,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
 
-use crate::snapshot::{now_ms, FrameLog, Snapshot};
+use crate::snapshot::{FrameLog, Snapshot, now_ms};
 
 pub const IOA_DIM_14A: u32 = 5001;
 pub const IOA_FEED_IN_LIMIT: u32 = 5002;
@@ -90,15 +90,16 @@ impl Station {
         let (ev_tx, mut ev_rx) = mpsc::channel::<Event>(512);
         let frames = self.frames.clone();
         let tap_peer = peer.clone();
-        let link = tokio::spawn(connection::run(stream, iec104::Config::default(), out_rx, ev_tx, move |dir, bytes| {
-            let _ = frames.send(FrameLog {
-                time_ms: now_ms(),
-                peer: tap_peer.clone(),
-                dir: if dir == Direction::Rx { "rx" } else { "tx" },
-                hex: bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "),
-                text: describe(bytes),
-            });
-        }));
+        let link =
+            tokio::spawn(connection::run(stream, iec104::Config::default(), out_rx, ev_tx, move |dir, bytes| {
+                let _ = frames.send(FrameLog {
+                    time_ms: now_ms(),
+                    peer: tap_peer.clone(),
+                    dir: if dir == Direction::Rx { "rx" } else { "tx" },
+                    hex: bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "),
+                    text: describe(bytes),
+                });
+            }));
 
         let mut snapshot = self.snapshot.clone();
         let mut started = false;
