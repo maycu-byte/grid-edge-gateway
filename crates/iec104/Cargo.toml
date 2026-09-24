@@ -1,0 +1,12 @@
+[package]
+name = "iec104"
+version = "0.1.0"
+description = "IEC 60870-5-104 framing, ASDUs and a sans-IO controlled-station session"
+edition.workspace = true
+license.workspace = true
+
+[features]
+tokio = ["dep:tokio"]
+
+[dependencies]
+tokio = { version = "1", features = ["io-util", "time", "sync", "macros"], optional = true }
