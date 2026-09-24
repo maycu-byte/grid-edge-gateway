@@ -71,6 +71,9 @@ pub struct SiteConfig {
     /// A charger keeps charging (or waiting) at least this long before the
     /// rotation may switch it, so cars are not toggled every second.
     pub min_dwell_s: f64,
+    /// A car whose slack before departure (time left minus time to charge
+    /// at full power) is below this charges at full power, plan or not.
+    pub deadline_guard_s: f64,
     /// Battery self-consumption target: discharge to keep grid import at or
     /// below this (0 = maximise self-consumption).
     pub import_target_kw: f64,
@@ -153,6 +156,12 @@ pub struct ChargerReading {
     pub current_a: f64,
     pub power_kw: f64,
     pub session_kwh: f64,
+    /// Energy the car still wants, kWh, when it told the charger.
+    pub remaining_kwh: Option<f64>,
+    /// Seconds until the car leaves, when it told the charger.
+    pub departure_s: Option<f64>,
+    /// Most current the car accepts, A, when it told the charger (ISO 15118).
+    pub car_max_current_a: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -161,6 +170,8 @@ pub struct HeatPumpReading {
     pub power_kw: f64,
     /// Power the heat pump would take without any limit.
     pub demand_kw: f64,
+    pub indoor_c: Option<f64>,
+    pub outdoor_c: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -184,6 +195,24 @@ pub struct Readings {
     pub batteries: Vec<BatteryReading>,
 }
 
+/// What a planner (the MPC in the `planner` crate) suggests for the current
+/// step. The controller follows it only as far as the rules allow: the
+/// consumption floor, feed-in limits, device minimums and the battery's
+/// state-of-charge window never depend on the plan being right.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Guidance {
+    /// Grid exchange the plan expects, kW (+ import). The battery holds it,
+    /// absorbing forecast errors — the plan's recourse.
+    pub grid_kw: Option<f64>,
+    /// Planned power per charger, kW; `None` = no opinion (as much as allowed).
+    pub charger_kw: Vec<Option<f64>>,
+    /// Planned electrical power per heat pump, kW; `None` = its own thermostat.
+    pub heat_pump_kw: Vec<Option<f64>>,
+    /// The plan expected a dimming now and has prepared for it. If a
+    /// dimming arrives that the plan did not expect, the rules take over.
+    pub dim_expected: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Setpoints {
     /// Active power limit for the inverters, % of installed power.
@@ -194,6 +223,8 @@ pub struct Setpoints {
     pub heat_pump_limit_kw: Vec<f64>,
     /// Power per battery, + charge, − discharge.
     pub battery_kw: Vec<f64>,
+    /// External power request per heat pump, kW; `None` = its own thermostat.
+    pub heat_pump_ext_kw: Vec<Option<f64>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,6 +293,7 @@ pub struct Controller {
     charger_on: Vec<bool>,
     charger_switched_at: Vec<f64>,
     accounting: Accounting,
+    guidance: Option<Guidance>,
 }
 
 impl Controller {
@@ -282,7 +314,18 @@ impl Controller {
             charger_on: vec![false; n],
             charger_switched_at: vec![f64::NEG_INFINITY; n],
             accounting: Accounting::default(),
+            guidance: None,
         }
+    }
+
+    /// Guidance for the next cycles, or `None` to run on rules alone (no
+    /// plan, a failed solve, a plan grown too old).
+    pub fn set_guidance(&mut self, guidance: Option<Guidance>) {
+        self.guidance = guidance;
+    }
+
+    pub fn guidance(&self) -> Option<&Guidance> {
+        self.guidance.as_ref()
     }
 
     /// Continues from persisted totals (after a gateway restart).
@@ -444,7 +487,7 @@ impl Controller {
             base_load,
             pv_kw,
             loads_kw,
-            feed_in_pct < 100.0,
+            (feed_in_pct < 100.0).then_some(allowed_export_kw),
         );
         let battery_discharge: f64 = battery_sp.iter().map(|&p| (-p).max(0.0)).sum();
         let battery_charge: f64 = battery_sp.iter().map(|&p| p.max(0.0)).sum();
@@ -499,7 +542,16 @@ impl Controller {
             curtailment_budget_used_pct: budget_used,
             fallbacks,
         };
-        (Setpoints { pv_limit_pct, charger_current_a, heat_pump_limit_kw, battery_kw: battery_sp }, status)
+        let heat_pump_ext_kw = (0..cfg.heat_pumps.len())
+            .map(|i| {
+                let planned = self.guidance.as_ref().and_then(|g| g.heat_pump_kw.get(i).copied().flatten())?;
+                Some(planned.min(heat_pump_limit_kw[i]).max(0.0))
+            })
+            .collect();
+        (
+            Setpoints { pv_limit_pct, charger_current_a, heat_pump_limit_kw, battery_kw: battery_sp, heat_pump_ext_kw },
+            status,
+        )
     }
 
     /// Battery plan.
@@ -513,6 +565,13 @@ impl Controller {
     /// it. With measured PV only, a curtailment would look like a deficit:
     /// the battery would discharge, the controller would curtail PV further
     /// to hold the export limit, and the two would chase each other down.
+    ///
+    /// With guidance, the battery holds the planned grid exchange instead
+    /// (it absorbs forecast errors), within the same safety rules: it still
+    /// stores whatever a feed-in limit would curtail, never discharges into
+    /// curtailed PV it cannot see, and never charges from the grid while the
+    /// consumption is dimmed. A dimming the plan did not expect falls back to
+    /// the rules above.
     #[allow(clippy::too_many_arguments)]
     fn plan_batteries(
         &self,
@@ -523,29 +582,48 @@ impl Controller {
         base_load: Option<f64>,
         pv_kw: Option<f64>,
         loads_kw: f64,
-        feed_limited: bool,
+        allowed_export_kw: Option<f64>,
     ) -> Vec<f64> {
         let cfg = &self.cfg;
+        let feed_limited = allowed_export_kw.is_some();
         // Grid power as it would be with the batteries idle.
         let Some(grid_idle) = grid_kw.map(|g| g - battery_now_kw) else {
             return vec![0.0; cfg.batteries.len()]; // blind: hold still
         };
         let pv_ref = r.pv_available_kw.or(pv_kw);
-        let mut want = if constrained {
-            // Import the site would have while dimmed ≈ base load − PV + a
-            // floor's worth of loads; cover as much as the battery can.
-            let base_minus_pv = base_load.zip(pv_ref).map_or(0.0, |(b, pv)| b - pv);
-            -(base_minus_pv + self.floor_kw).max(0.0)
-        } else {
-            // + import / − export with the batteries idle and PV unconstrained.
-            let unconstrained = base_load.zip(r.pv_available_kw).map(|(b, av)| b + loads_kw - av);
-            let net = unconstrained.unwrap_or(grid_idle);
-            if net < 0.0 {
-                -net // surplus → charge
-            } else if feed_limited && unconstrained.is_none() {
-                0.0 // cannot tell a real deficit from our own curtailment
-            } else {
-                -(net - cfg.import_target_kw).max(0.0) // deficit → discharge
+        // + import / − export with the batteries idle and PV unconstrained.
+        let unconstrained = base_load.zip(r.pv_available_kw).map(|(b, av)| b + loads_kw - av);
+        let surplus_now = base_load.zip(pv_ref).map_or(0.0, |(b, pv)| (pv - b - loads_kw).max(0.0));
+        let guided = self.guidance.as_ref().and_then(|g| g.grid_kw.map(|target| (target, g.dim_expected)));
+        let mut want = match guided {
+            Some((target, expected)) if !constrained || expected => {
+                let mut w = target - grid_idle;
+                if let (Some(unc), Some(ax)) = (unconstrained, allowed_export_kw) {
+                    w = w.max(-unc - ax); // store what the limit would otherwise curtail
+                }
+                if feed_limited && unconstrained.is_none() {
+                    w = w.max(0.0);
+                }
+                if constrained {
+                    w = w.min(surplus_now); // no grid charging while dimmed
+                }
+                w
+            }
+            _ if constrained => {
+                // Import the site would have while dimmed ≈ base load − PV + a
+                // floor's worth of loads; cover as much as the battery can.
+                let base_minus_pv = base_load.zip(pv_ref).map_or(0.0, |(b, pv)| b - pv);
+                -(base_minus_pv + self.floor_kw).max(0.0)
+            }
+            _ => {
+                let net = unconstrained.unwrap_or(grid_idle);
+                if net < 0.0 {
+                    -net // surplus → charge
+                } else if feed_limited && unconstrained.is_none() {
+                    0.0 // cannot tell a real deficit from our own curtailment
+                } else {
+                    -(net - cfg.import_target_kw).max(0.0) // deficit → discharge
+                }
             }
         };
         cfg.batteries
@@ -570,8 +648,9 @@ impl Controller {
     /// Policy (the EMS may split freely, BK6-22-300 4.5.2 sentence 6):
     /// 1. each heat pump first gets up to 40% of its rating — the share the
     ///    German regulation itself attributes to it;
-    /// 2. then as many waiting cars as fit get the 6 A minimum, those that
-    ///    charged least so far first;
+    /// 2. then as many waiting cars as fit get the 6 A minimum — cars that
+    ///    must leave soonest relative to the energy they still need (least
+    ///    laxity) first, then those that charged least so far;
     /// 3. what is left tops up the heat pumps to their demand, then the
     ///    chargers evenly up to their maximum.
     ///
@@ -583,10 +662,36 @@ impl Controller {
         let contract = matches!(cfg.policy.consumption, ConsumptionRule::Contract { .. });
         let exempt_c = |i: usize| contract && cfg.chargers[i].opted_out;
         let exempt_h = |i: usize| contract && cfg.heat_pumps[i].opted_out;
-        let waiting: Vec<usize> =
-            (0..cfg.chargers.len()).filter(|&i| r.chargers.get(i).is_some_and(|c| c.online && c.car_waiting)).collect();
+        // Slack before departure: time left minus time to charge at full power.
+        let laxity = |i: usize| {
+            let c = &r.chargers[i];
+            let max_a = c.car_max_current_a.unwrap_or(f64::INFINITY).min(cfg.chargers[i].max_current_a);
+            match (c.departure_s, c.remaining_kwh) {
+                (Some(dep), Some(rem)) if max_a > 0.0 => dep - rem / three_phase_kw(max_a) * 3600.0,
+                _ => f64::INFINITY,
+            }
+        };
+        // What the plan wants for each charger, as a current cap. A plan of
+        // less than half the 6 A minimum means "not now". A car about to miss
+        // its departure charges at full power whatever the plan says.
+        let min_kw = three_phase_kw(EV_MIN_CURRENT_A);
+        let planned_a = |i: usize| -> Option<f64> {
+            let kw = self.guidance.as_ref().and_then(|g| g.charger_kw.get(i).copied().flatten())?;
+            if laxity(i) <= cfg.deadline_guard_s {
+                return None;
+            }
+            Some(if kw < min_kw / 2.0 {
+                0.0
+            } else {
+                three_phase_current_a(kw).round().clamp(EV_MIN_CURRENT_A, cfg.chargers[i].max_current_a)
+            })
+        };
+        let cap_a = |i: usize| planned_a(i).unwrap_or(cfg.chargers[i].max_current_a);
+        let waiting: Vec<usize> = (0..cfg.chargers.len())
+            .filter(|&i| r.chargers.get(i).is_some_and(|c| c.online && c.car_waiting) && cap_a(i) > 0.0)
+            .collect();
 
-        let mut currents: Vec<f64> = cfg.chargers.iter().map(|c| c.max_current_a).collect();
+        let mut currents: Vec<f64> = (0..cfg.chargers.len()).map(cap_a).collect();
         let mut hp: Vec<f64> = cfg.heat_pumps.iter().map(|h| h.rated_kw).collect();
         if budget_kw.is_infinite() {
             for i in 0..cfg.chargers.len() {
@@ -595,8 +700,14 @@ impl Controller {
             return (currents, hp);
         }
 
+        // A guided heat pump reports our own request as its demand; use the
+        // plan itself, or a request of 0 would lock the unit off while dimmed.
         let demand = |i: usize| {
-            r.heat_pumps.get(i).filter(|h| h.online).map_or(0.0, |h| h.demand_kw.min(cfg.heat_pumps[i].rated_kw))
+            let planned = self.guidance.as_ref().and_then(|g| g.heat_pump_kw.get(i).copied().flatten());
+            r.heat_pumps
+                .get(i)
+                .filter(|h| h.online)
+                .map_or(0.0, |h| planned.unwrap_or(h.demand_kw).min(cfg.heat_pumps[i].rated_kw))
         };
         let mut left = budget_kw.max(0.0);
         // Exempt devices run free but their draw still reaches the grid.
@@ -616,8 +727,8 @@ impl Controller {
         }
 
         // 2. chargers: 6 A minimum for as many cars as fit. Cars inside their
-        // dwell time keep their current state first, then least energy first.
-        let min_kw = three_phase_kw(EV_MIN_CURRENT_A);
+        // dwell time keep their current state first; then least laxity (time
+        // to departure minus time to charge at full power), then least energy.
         let mut order: Vec<usize> = waiting.iter().copied().filter(|&i| !exempt_c(i)).collect();
         order.sort_by(|&a, &b| {
             let key = |i: usize| {
@@ -627,11 +738,11 @@ impl Controller {
                     (false, _) => 1,
                     (true, false) => 2,
                 };
-                (rank, r.chargers[i].session_kwh)
+                (rank, laxity(i), r.chargers[i].session_kwh)
             };
-            let (ra, ea) = key(a);
-            let (rb, eb) = key(b);
-            ra.cmp(&rb).then(ea.total_cmp(&eb))
+            let (ra, la, ea) = key(a);
+            let (rb, lb, eb) = key(b);
+            ra.cmp(&rb).then(la.total_cmp(&lb)).then(ea.total_cmp(&eb))
         });
         let fit = ((left / min_kw).floor() as usize).min(order.len());
         let active: Vec<usize> = order[..fit].to_vec();
@@ -661,7 +772,7 @@ impl Controller {
             let share = (spare_a / open.len() as f64).floor().max(1.0);
             let mut next = Vec::new();
             for &i in &open {
-                let room = (cfg.chargers[i].max_current_a - currents[i]).floor();
+                let room = (cap_a(i) - currents[i]).floor();
                 let add = share.min(room).min(spare_a.floor());
                 currents[i] += add;
                 spare_a -= add;

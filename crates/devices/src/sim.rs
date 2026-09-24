@@ -170,6 +170,8 @@ fn working_hours(t_s: f64) -> bool {
 #[derive(Debug, Clone)]
 pub struct BatterySim {
     pub capacity_kwh: f64,
+    /// One-way efficiency (charging and discharging each lose this much).
+    pub efficiency: f64,
     pub max_charge_kw: f64,
     pub max_discharge_kw: f64,
     pub soc_pct: f64,
@@ -316,6 +318,7 @@ impl SiteSim {
             }],
             batteries: vec![BatterySim {
                 capacity_kwh: 100.0,
+                efficiency: 0.95,
                 max_charge_kw: 50.0,
                 max_discharge_kw: 50.0,
                 soc_pct: 40.0,
@@ -499,7 +502,8 @@ impl SiteSim {
                 p = 0.0;
             }
             b.power_kw = p;
-            b.soc_pct = (b.soc_pct + p * hours / b.capacity_kwh * 100.0).clamp(0.0, 100.0);
+            let stored = if p > 0.0 { p * b.efficiency } else { p / b.efficiency };
+            b.soc_pct = (b.soc_pct + stored * hours / b.capacity_kwh * 100.0).clamp(0.0, 100.0);
         }
 
         // Heat pump and building.
@@ -730,6 +734,7 @@ impl SiteSim {
         r[evse::DEPARTURE_MIN as usize] = c.car.as_ref().map_or(evse::NO_DEPARTURE, |car| {
             ((car.departure_s - self.t_s) / 60.0).floor().clamp(0.0, (evse::NO_DEPARTURE - 1) as f64) as u16
         });
+        r[evse::CAR_MAX_CURRENT as usize] = c.car.as_ref().map_or(0, |car| (car.max_current_a * 10.0) as u16);
         r
     }
 

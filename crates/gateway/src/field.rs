@@ -39,12 +39,18 @@ pub struct ChargerReading {
     pub current_a: f64,
     pub kw: f64,
     pub session_kwh: f64,
+    /// ISO 15118 values the car passed on, when it did.
+    pub energy_request_kwh: Option<f64>,
+    pub departure_s: Option<f64>,
+    pub car_max_current_a: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct HeatPumpReading {
     pub kw: f64,
     pub demand_kw: f64,
+    pub indoor_c: f64,
+    pub outdoor_c: f64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -307,11 +313,17 @@ async fn charger_session(
     loop {
         tick.tick().await;
         let r = read(&mut ctx, 0, evse::LEN).await?;
+        let request = regs_to_u32(&r[evse::ENERGY_REQUEST as usize..]) as f64 / 1000.0;
+        let dep = r[evse::DEPARTURE_MIN as usize];
+        let car_max = r[evse::CAR_MAX_CURRENT as usize];
         let reading = ChargerReading {
             status: r[evse::STATUS as usize],
             current_a: r[evse::CURRENT as usize] as f64 / 10.0,
             kw: regs_to_u32(&r[evse::POWER as usize..]) as f64 / 1000.0,
             session_kwh: regs_to_u32(&r[evse::SESSION_ENERGY as usize..]) as f64 / 1000.0,
+            energy_request_kwh: (request > 0.0).then_some(request),
+            departure_s: (dep != evse::NO_DEPARTURE).then_some(dep as f64 * 60.0),
+            car_max_current_a: (car_max > 0).then(|| car_max as f64 / 10.0),
         };
         state.lock().unwrap().chargers[i].set(reading);
         // Written every cycle: it is also the heartbeat.
@@ -335,9 +347,17 @@ async fn heat_pump_session(
         state.lock().unwrap().heat_pumps[i].set(HeatPumpReading {
             kw: r[heat_pump::POWER as usize] as f64 / 10.0,
             demand_kw: r[heat_pump::DEMAND as usize] as f64 / 10.0,
+            indoor_c: r[heat_pump::INDOOR as usize] as i16 as f64 / 10.0,
+            outdoor_c: r[heat_pump::OUTDOOR as usize] as i16 as f64 / 10.0,
         });
-        let kw = setpoints.borrow().heat_pump_limit_kw.get(i).copied().unwrap_or(0.0);
+        let (kw, ext) = {
+            let sp = setpoints.borrow();
+            (sp.heat_pump_limit_kw.get(i).copied().unwrap_or(0.0), sp.heat_pump_ext_kw.get(i).copied().flatten())
+        };
         write(&mut ctx, heat_pump::POWER_LIMIT, (kw * 10.0).floor() as u16).await?;
+        // An external power request from the planner, or the thermostat.
+        let raw = ext.map_or(heat_pump::EXT_NONE, |p| (p * 10.0).round().clamp(0.0, 65_000.0) as u16);
+        write(&mut ctx, heat_pump::EXT_POWER, raw).await?;
     }
 }
 

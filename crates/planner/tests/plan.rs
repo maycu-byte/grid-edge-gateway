@@ -30,6 +30,7 @@ fn input(n: usize, f: Forecast) -> PlanInput {
         evs: vec![],
         heat_pump: None,
         uncertainty: Uncertainty::Deterministic,
+        recovery_steps: 8,
         weights: Weights { terminal_value_eur_per_kwh: Some(0.0), ..Weights::default() },
     }
 }
@@ -194,16 +195,19 @@ fn uncertainty_makes_the_plan_keep_more_in_the_battery() {
     inp.evs =
         vec![EvRequest { remaining_kwh: 30.0, max_kw: 22.0, departure_h: Some(8.0), efficiency: 1.0, dimmable: true }];
 
-    let lower_bound = |u: Uncertainty| {
+    let lower_bound = |u: Uncertainty, k: usize| {
         let mut i = inp.clone();
         i.uncertainty = u;
         let p = plan(&i).unwrap();
-        p.soc_envelope_kwh[10].0
+        p.soc_envelope_kwh[k].0
     };
-    let det = lower_bound(Uncertainty::Deterministic);
-    let cc = lower_bound(Uncertainty::Chance { epsilon: 0.05 });
-    let rob = lower_bound(Uncertainty::Robust);
+    // In and just before the expected dimming the envelope tightens…
+    let det = lower_bound(Uncertainty::Deterministic, 29);
+    let cc = lower_bound(Uncertainty::Chance { epsilon: 0.05 }, 29);
+    let rob = lower_bound(Uncertainty::Robust, 29);
     assert!(det < cc && cc < rob, "envelope tightens: {det} < {cc} < {rob}");
+    // …but not hours before it, where a shortfall is simply bought from the grid.
+    assert_eq!(lower_bound(Uncertainty::Chance { epsilon: 0.05 }, 5), det);
 
     let budget = |u: Uncertainty| {
         let mut i = inp.clone();

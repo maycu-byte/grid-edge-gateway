@@ -45,6 +45,9 @@ pub struct Site {
     pub pv_ramp_pct_per_s: f64,
     pub margin_kw: f64,
     pub min_dwell_s: f64,
+    /// Cars with less slack than this before departure charge at full power.
+    #[serde(default = "default_deadline_guard")]
+    pub deadline_guard_s: f64,
     #[serde(default)]
     pub import_target_kw: f64,
     pub control_period_ms: u64,
@@ -172,6 +175,9 @@ fn default_jurisdiction() -> String {
 fn default_pv_ramp() -> f64 {
     10.0 / 60.0
 }
+fn default_deadline_guard() -> f64 {
+    900.0
+}
 fn default_link_loss() -> LinkLossPolicy {
     LinkLossPolicy::Hold
 }
@@ -263,6 +269,7 @@ impl Config {
             pv_ramp_pct_per_s: self.site.pv_ramp_pct_per_s,
             margin_kw: self.site.margin_kw,
             min_dwell_s: self.site.min_dwell_s,
+            deadline_guard_s: self.site.deadline_guard_s,
             import_target_kw: self.site.import_target_kw,
         })
     }

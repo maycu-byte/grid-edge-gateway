@@ -41,6 +41,9 @@ pub fn collect(f: &FieldState, stale: Duration) -> (Readings, Views) {
                     current_a: c.current_a,
                     power_kw: c.kw,
                     session_kwh: c.session_kwh,
+                    remaining_kwh: c.energy_request_kwh.map(|r| (r - c.session_kwh).max(0.0)),
+                    departure_s: c.departure_s,
+                    car_max_current_a: c.car_max_current_a,
                 },
                 None => control::ChargerReading::default(),
             })
@@ -48,7 +51,13 @@ pub fn collect(f: &FieldState, stale: Duration) -> (Readings, Views) {
         heat_pumps: heat_pumps
             .iter()
             .map(|h| match h {
-                Some(h) => control::HeatPumpReading { online: true, power_kw: h.kw, demand_kw: h.demand_kw },
+                Some(h) => control::HeatPumpReading {
+                    online: true,
+                    power_kw: h.kw,
+                    demand_kw: h.demand_kw,
+                    indoor_c: Some(h.indoor_c),
+                    outdoor_c: Some(h.outdoor_c),
+                },
                 None => control::HeatPumpReading::default(),
             })
             .collect(),

@@ -12,6 +12,6 @@ pub mod rules;
 pub use accounting::{Clock, Totals};
 pub use controller::{
     BatteryReading, BatterySpec, ChargerReading, ChargerSpec, Controller, DsoCommands, Fallback, FeedInReference,
-    HeatPumpReading, HeatPumpSpec, Mode, Readings, Refusal, Setpoints, SiteConfig, Status,
+    Guidance, HeatPumpReading, HeatPumpSpec, Mode, Readings, Refusal, Setpoints, SiteConfig, Status,
 };
 pub use policy::{ConsumptionRule, Jurisdiction, Policy};

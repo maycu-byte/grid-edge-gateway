@@ -18,14 +18,24 @@
 //! quadratic term that smooths the battery schedule.
 //!
 //! Uncertainty (PV and base load forecast errors) enters where a shortfall
-//! would hurt: the PV that may be counted on during a dimming, and the
-//! battery's state-of-charge envelope. The real-time layer lets the battery
+//! would hurt: the PV that may be counted on during a dimming, and the lower
+//! edge of the battery's state-of-charge envelope. (A battery fuller than
+//! planned only means more export or curtailment — no comfort or compliance
+//! risk — so the upper edge is not tightened.) The real-time layer lets the battery
 //! absorb forecast errors (an affine recourse with gain 1), so its energy
 //! deviates from the plan by the accumulated error; the envelope is
 //! tightened by that amount — `z·σ` for a chance constraint with
 //! `z = Φ⁻¹(1 − ε)`, or the worst case for the robust variant. Errors are
 //! accumulated linearly, not in quadrature, because a cloudy day is cloudy
 //! all day: forecast errors of neighbouring hours are strongly correlated.
+//! They are accumulated only over the time the next plans need to make a
+//! deviation up by buying from the grid (`recovery_steps`), and over a whole
+//! expected dimming, during which buying for the battery is not allowed.
+//! And the envelope is tightened only where that matters: in and just before
+//! an expected dimming. Anywhere else a shortfall is simply bought from the
+//! grid at the price of the moment, a cost risk the expected-value objective
+//! already weighs — tightening there would make the battery charge early and
+//! dear to insure against something harmless.
 
 use crate::normal::inverse_cdf;
 use crate::qp::{Qp, Terms};
@@ -143,6 +153,10 @@ pub struct PlanInput {
     pub evs: Vec<EvRequest>,
     pub heat_pump: Option<HeatPumpModel>,
     pub uncertainty: Uncertainty,
+    /// Steps it takes to make up a battery deviation by buying from the grid.
+    /// Forecast errors are accumulated over this window (and over a whole
+    /// expected dimming, when buying is not an option).
+    pub recovery_steps: usize,
     pub weights: Weights,
 }
 
@@ -287,7 +301,24 @@ pub fn plan(inp: &PlanInput) -> Result<Plan, PlanError> {
     let mut ev: Vec<Vec<usize>> = vec![Vec::with_capacity(n); inp.evs.len()];
     let mut dim_budget = vec![None; n];
 
-    let (mut acc_sigma, mut acc_low, mut acc_high) = (0.0, 0.0, 0.0);
+    // Per-step forecast-error contributions, accumulated over each step's
+    // recovery window: `recovery_steps` back, or back to the start of the
+    // expected dimming the step is in (plus the recovery window before it).
+    let contrib: Vec<(f64, f64)> = (0..n)
+        .map(|k| {
+            (
+                dt * (f.pv_sigma_kw[k] + f.base_sigma_kw),
+                dt * ((f.pv_kw[k] - f.pv_worst_kw[k]).max(0.0) + 2.0 * f.base_sigma_kw),
+            )
+        })
+        .collect();
+    let window_start = |k: usize| {
+        let mut s = k;
+        while s > 0 && inp.dim[s] && inp.dim[s - 1] {
+            s -= 1;
+        }
+        (s + 1).saturating_sub(inp.recovery_steps.max(1))
+    };
 
     for k in 0..n {
         let g_in = qp.var(0.0, inp.import_limit_kw);
@@ -328,26 +359,22 @@ pub fn plan(inp: &PlanInput) -> Result<Plan, PlanError> {
             qp.cost(band_hi, dt * w.soc_band_eur_per_kwh_h);
             qp.ge(vec![(ek, 1.0), (band_lo, 1.0)], b.band_lo_kwh);
             qp.le(vec![(ek, 1.0), (band_hi, -1.0)], b.band_hi_kwh);
-            // envelope tightened by the accumulated forecast error the
-            // battery will have absorbed by the end of this step
-            acc_sigma += dt * (f.pv_sigma_kw[k] + f.base_sigma_kw);
-            acc_low += dt * ((f.pv_kw[k] - f.pv_worst_kw[k]).max(0.0) + 2.0 * f.base_sigma_kw);
-            acc_high += dt * 2.0 * (f.pv_sigma_kw[k] + f.base_sigma_kw);
-            let (t_lo, t_hi) = match inp.uncertainty {
-                Uncertainty::Deterministic => (0.0, 0.0),
-                Uncertainty::Chance { .. } => (z * acc_sigma, z * acc_sigma),
-                Uncertainty::Robust => (acc_low, acc_high),
+            // envelope tightened by the forecast error the battery may have
+            // absorbed by the end of this step and not yet made up
+            let (acc_sigma, acc_low) =
+                contrib[window_start(k)..=k].iter().fold((0.0, 0.0), |a, c| (a.0 + c.0, a.1 + c.1));
+            let at_risk = inp.dim[k..(k + inp.recovery_steps.max(1)).min(n)].iter().any(|&d| d);
+            let t_lo = match inp.uncertainty {
+                _ if !at_risk => 0.0,
+                Uncertainty::Deterministic => 0.0,
+                Uncertainty::Chance { .. } => z * acc_sigma,
+                Uncertainty::Robust => acc_low,
             };
-            let env = (b.min_kwh + t_lo, b.max_kwh - t_hi);
+            let env = (b.min_kwh + t_lo, b.max_kwh);
             if t_lo > 0.0 {
                 let s = qp.var(0.0, f64::INFINITY);
                 qp.cost(s, w.soft_envelope_eur_per_kwh);
                 qp.ge(vec![(ek, 1.0), (s, 1.0)], env.0);
-            }
-            if t_hi > 0.0 {
-                let s = qp.var(0.0, f64::INFINITY);
-                qp.cost(s, w.soft_envelope_eur_per_kwh);
-                qp.le(vec![(ek, 1.0), (s, -1.0)], env.1);
             }
             envelope.push(env);
             // smooth schedule: w·(Pₖ − Pₖ₋₁)²

@@ -80,6 +80,7 @@ async fn main() {
         charger_current_a: cfg.chargers.iter().map(|c| c.failsafe_current_a).collect(),
         heat_pump_limit_kw: cfg.heat_pumps.iter().map(|h| 0.4 * h.rated_kw).collect(),
         battery_kw: vec![0.0; cfg.batteries.len()],
+        heat_pump_ext_kw: vec![None; cfg.heat_pumps.len()],
     };
     let (setpoints_tx, setpoints_rx) = watch::channel(initial_setpoints);
     let (snapshot_tx, snapshot_rx) = watch::channel(Snapshot::default());

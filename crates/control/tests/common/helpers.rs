@@ -21,6 +21,7 @@ fn depot() -> SiteConfig {
         pv_ramp_pct_per_s: 100.0,
         margin_kw: 0.3,
         min_dwell_s: 300.0,
+        deadline_guard_s: 900.0,
         import_target_kw: 0.0,
     }
 }
@@ -34,6 +35,7 @@ fn readings(base_kw: f64, pv_kw: f64, cars: [bool; 4], currents: &[f64], hp_kw: 
             current_a: if cars[i] { currents[i] } else { 0.0 },
             power_kw: if cars[i] { three_phase_kw(currents[i]) } else { 0.0 },
             session_kwh: i as f64, // charger 0 has charged least
+            ..Default::default()
         })
         .collect();
     let steuve: f64 = chargers.iter().map(|c| c.power_kw).sum::<f64>() + hp_kw;
@@ -42,7 +44,7 @@ fn readings(base_kw: f64, pv_kw: f64, cars: [bool; 4], currents: &[f64], hp_kw: 
         pv_kw: Some(pv_kw),
         pv_available_kw: None,
         chargers,
-        heat_pumps: vec![HeatPumpReading { online: true, power_kw: hp_kw, demand_kw: hp_demand }],
+        heat_pumps: vec![HeatPumpReading { online: true, power_kw: hp_kw, demand_kw: hp_demand, ..Default::default() }],
         batteries: vec![],
     }
 }

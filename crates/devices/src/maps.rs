@@ -32,7 +32,10 @@ pub mod evse {
     /// Minutes until the car leaves — ISO 15118-2 `DepartureTime`, which is
     /// also relative. `NO_DEPARTURE` when unknown.
     pub const DEPARTURE_MIN: u16 = 13;
-    pub const LEN: u16 = 14;
+    /// Most current the car accepts, 0.1 A — ISO 15118-2 `EVMaxCurrent`.
+    /// 0 when no car or unknown.
+    pub const CAR_MAX_CURRENT: u16 = 14;
+    pub const LEN: u16 = 15;
 
     pub const NO_DEPARTURE: u16 = 0xFFFF;
 

@@ -3,7 +3,9 @@
 /// Φ⁻¹(p): the z with P(Z ≤ z) = p for a standard normal Z.
 ///
 /// Acklam's rational approximation (relative error below 1.2e-9), which is
-/// far more precise than any forecast error model it is used with.
+/// far more precise than any forecast error model it is used with. The
+/// coefficients are kept exactly as published.
+#[allow(clippy::excessive_precision)]
 pub fn inverse_cdf(p: f64) -> f64 {
     assert!(p > 0.0 && p < 1.0, "probability must be in (0, 1), got {p}");
     const A: [f64; 6] = [

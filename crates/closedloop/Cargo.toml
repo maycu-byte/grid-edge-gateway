@@ -1,0 +1,13 @@
+[package]
+name = "closedloop"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+control = { version = "0.1.0", path = "../control" }
+devices = { version = "0.1.0", path = "../devices" }
+planner = { version = "0.1.0", path = "../planner" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
