@@ -1,14 +1,11 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Control logic of the edge gateway: §14a EnWG dimming via an energy
+//! management system, the DSO feed-in limit, and the gradual release.
+//! No I/O — the same code runs in the gateway, in tests and in the browser.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod controller;
+pub mod rules;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use controller::{
+    ChargerReading, ChargerSpec, Controller, DsoCommands, Fallback, FeedInReference, HeatPumpReading, HeatPumpSpec,
+    Mode, Readings, SiteConfig, Setpoints, Status,
+};
