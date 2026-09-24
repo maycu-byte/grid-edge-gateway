@@ -2,7 +2,9 @@
 //! for inverters and meter, a typical wallbox map for the chargers) and a
 //! deterministic physics simulation behind them.
 
+pub mod climate;
 pub mod maps;
+mod prices_data;
 pub mod sim;
 pub mod sunspec;
 

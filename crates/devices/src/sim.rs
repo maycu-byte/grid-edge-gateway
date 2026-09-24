@@ -1,9 +1,12 @@
 //! Physics of the demo site and the Modbus register view of every device.
 //!
 //! The simulation is deterministic for a given seed, so the browser demo,
-//! the gateway integration tests and the site simulator all see the same day.
+//! the gateway integration tests, the site simulator and the study all see
+//! the same days. Time `t_s` counts seconds from local midnight of day 0 and
+//! may run over several days.
 
-use crate::maps::{battery, evse, heat_pump, regs_to_u32, u32_to_regs};
+use crate::climate::{Climate, Season};
+use crate::maps::{battery, evse, heat_pump, regs_to_u32, tenths_i16, u32_to_regs};
 use crate::sunspec::{self, NI_INT16, available, common, controls, inverter, meter, nameplate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -22,6 +25,30 @@ pub enum Exception {
     IllegalDataValue,
     /// The device does not answer (fault injection).
     DeviceOffline,
+}
+
+/// How the sky behaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Weather {
+    /// A fair day, every day: the demo's default.
+    Fair,
+    /// Each day's cloudiness is drawn from the season's climatology (the study).
+    Random,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SimConfig {
+    /// Seconds after midnight of day 0 the simulation starts at.
+    pub start_s: f64,
+    pub seed: u64,
+    pub season: Season,
+    pub weather: Weather,
+}
+
+impl SimConfig {
+    pub fn new(start_s: f64, seed: u64, season: Season, weather: Weather) -> Self {
+        SimConfig { start_s, seed, season, weather }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +70,8 @@ pub struct Car {
     pub max_current_a: f64,
     pub needs_kwh: f64,
     pub charged_kwh: f64,
+    /// When the car leaves, seconds (same clock as `SiteSim::t_s`).
+    pub departure_s: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -67,14 +96,75 @@ impl ChargerSim {
     }
 }
 
+/// A heat pump with its own thermostat, heating the depot's building.
 #[derive(Debug, Clone)]
 pub struct HeatPumpSim {
     pub rated_kw: f64,
     pub min_kw: f64,
     pub limit_kw: f64,
+    /// External power request from the EMS, kW; `None` = own thermostat.
+    pub ext_power_kw: Option<f64>,
+    last_ext_write_s: f64,
+    /// Active setpoint of the unit's time program, °C.
+    pub setpoint_c: f64,
     pub demand_kw: f64,
     pub power_kw: f64,
     pub online: bool,
+    cycle_on: bool,
+}
+
+impl HeatPumpSim {
+    pub fn external(&self, now_s: f64) -> bool {
+        self.ext_power_kw.is_some() && now_s - self.last_ext_write_s <= heat_pump::EXT_TIMEOUT_S
+    }
+}
+
+/// The depot's heated volume as one thermal mass (first-order RC model).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Building {
+    pub indoor_c: f64,
+    /// Heat loss per kelvin of indoor–outdoor difference, kW/K.
+    pub ua_kw_per_k: f64,
+    /// Thermal capacity, kWh/K (time constant = cap / ua).
+    pub cap_kwh_per_k: f64,
+}
+
+impl Building {
+    /// Internal gains (people, machines, lighting), kW.
+    pub fn gains_kw(t_s: f64) -> f64 {
+        if working_hours(t_s) { 3.0 } else { 1.0 }
+    }
+
+    /// Occupied hours, when comfort matters: 06:00–22:00.
+    pub fn occupied(t_s: f64) -> bool {
+        (6.0..22.0).contains(&hour_of_day(t_s))
+    }
+
+    /// Lowest acceptable indoor temperature, °C.
+    pub fn comfort_min_c(t_s: f64) -> f64 {
+        if Self::occupied(t_s) { 20.0 } else { 17.0 }
+    }
+
+    pub const COMFORT_MAX_C: f64 = 23.0;
+}
+
+/// Coefficient of performance of an air-to-water heat pump, as a simple
+/// function of outdoor temperature (illustrative: ~3 at 0 °C).
+pub fn cop(outdoor_c: f64) -> f64 {
+    (3.0 + 0.08 * outdoor_c).clamp(1.8, 5.0)
+}
+
+/// Time program of the heat pump's own thermostat, °C.
+pub fn thermostat_setpoint_c(t_s: f64) -> f64 {
+    if Building::occupied(t_s) { 21.0 } else { 18.0 }
+}
+
+fn hour_of_day(t_s: f64) -> f64 {
+    t_s.rem_euclid(86_400.0) / 3600.0
+}
+
+fn working_hours(t_s: f64) -> bool {
+    (7.0..18.0).contains(&hour_of_day(t_s))
 }
 
 #[derive(Debug, Clone)]
@@ -96,41 +186,81 @@ impl BatterySim {
     }
 }
 
-/// A car arriving at a charger during the simulated day.
+/// A car arriving at a charger.
 #[derive(Debug, Clone, Copy)]
 pub struct Arrival {
     pub at_s: f64,
     pub charger: usize,
     pub needs_kwh: f64,
     pub max_current_a: f64,
+    pub departure_s: f64,
 }
+
+/// What happened when a car left.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DepartureLog {
+    pub at_s: f64,
+    pub charger: usize,
+    pub needs_kwh: f64,
+    pub charged_kwh: f64,
+}
+
+impl DepartureLog {
+    pub fn unmet_kwh(&self) -> f64 {
+        (self.needs_kwh - self.charged_kwh).max(0.0)
+    }
+}
+
+/// The depot's daily fleet: (arrival h, charger, kWh wanted, car's max A, hours plugged in).
+const FLEET: [(f64, usize, f64, f64, f64); 7] = [
+    (8.5, 2, 20.0, 16.0, 4.0),     // visitor, leaves 12:30
+    (10.25, 3, 45.0, 32.0, 5.5),   // van between tours, 15:45
+    (11.5, 0, 30.0, 32.0, 4.5),    // van, 16:00
+    (16.5, 1, 50.0, 32.0, 14.0),   // van, overnight until 06:30
+    (16.75, 2, 40.0, 32.0, 3.75),  // van for the evening shift, leaves 20:30
+    (17.0, 0, 45.0, 32.0, 13.0),   // van, overnight until 06:00
+    (17.25, 3, 30.0, 16.0, 13.75), // van, overnight until 07:00
+];
+
+const SIM_DAYS: usize = 10;
 
 #[derive(Debug, Clone)]
 pub struct SiteSim {
-    /// Seconds since midnight of the simulated day.
+    /// Seconds since local midnight of day 0.
     pub t_s: f64,
+    pub climate: Climate,
+    pub weather: Weather,
     pub inverters: Vec<InverterSim>,
     pub chargers: Vec<ChargerSim>,
     pub heat_pumps: Vec<HeatPumpSim>,
     pub batteries: Vec<BatterySim>,
+    pub building: Building,
     pub meter_online: bool,
     pub base_kw: f64,
     pub arrivals: Vec<Arrival>,
     next_arrival: usize,
+    pub departures: Vec<DepartureLog>,
+    /// Cloudiness each day aims at (fraction of clear-sky PV).
+    pub cloud_day: Vec<f64>,
     cloud: f64,
     rng: u64,
 }
 
-/// Sunrise and sunset of a clear spring day in south-west Germany (local time).
-const SUNRISE_S: f64 = 6.5 * 3600.0;
-const SUNSET_S: f64 = 19.5 * 3600.0;
 /// Inverter output ramp, fraction of rating per second.
 const INVERTER_RAMP_PER_S: f64 = 0.1;
+/// Thermostat gain on the temperature error, kW (thermal) per K.
+const THERMOSTAT_GAIN_KW_PER_K: f64 = 6.0;
 
 impl SiteSim {
-    /// The demo depot: 2 × 60 kW inverters (120 kWp), four 22 kW chargers and
-    /// a 14 kW heat pump, starting at `start_s` seconds after midnight.
+    /// The demo depot on a fair spring day: 2 × 60 kW inverters (120 kWp),
+    /// four 22 kW chargers, a 14 kW heat pump and a 100 kWh battery.
     pub fn depot(start_s: f64, seed: u64) -> Self {
+        Self::new(SimConfig::new(start_s, seed, Season::Spring, Weather::Fair))
+    }
+
+    pub fn new(cfg: SimConfig) -> Self {
+        let start_s = cfg.start_s;
+        let climate = Climate::of(cfg.season);
         let inverter = InverterSim {
             rated_kw: 60.0,
             output_kw: 0.0,
@@ -151,27 +281,38 @@ impl SiteSim {
             current_a: 0.0,
             online: true,
         };
-        let h = |hh: f64| hh * 3600.0;
-        let arrivals = vec![
-            Arrival { at_s: h(8.5), charger: 2, needs_kwh: 20.0, max_current_a: 16.0 },
-            Arrival { at_s: h(10.25), charger: 3, needs_kwh: 45.0, max_current_a: 32.0 },
-            Arrival { at_s: h(11.5), charger: 0, needs_kwh: 30.0, max_current_a: 32.0 },
-            Arrival { at_s: h(16.5), charger: 1, needs_kwh: 50.0, max_current_a: 32.0 },
-            Arrival { at_s: h(16.75), charger: 2, needs_kwh: 40.0, max_current_a: 32.0 },
-            Arrival { at_s: h(17.0), charger: 0, needs_kwh: 45.0, max_current_a: 32.0 },
-            Arrival { at_s: h(17.25), charger: 3, needs_kwh: 30.0, max_current_a: 16.0 },
-        ];
+        let mut arrivals = Vec::new();
+        for day in 0..SIM_DAYS {
+            for &(h, charger, needs_kwh, max_current_a, dwell_h) in &FLEET {
+                let at_s = day as f64 * 86_400.0 + h * 3600.0;
+                arrivals.push(Arrival {
+                    at_s,
+                    charger,
+                    needs_kwh,
+                    max_current_a,
+                    departure_s: at_s + dwell_h * 3600.0,
+                });
+            }
+        }
+        arrivals.sort_by(|a, b| a.at_s.total_cmp(&b.at_s));
+
         let mut sim = SiteSim {
             t_s: start_s,
+            climate,
+            weather: cfg.weather,
             inverters: vec![inverter; 2],
             chargers: vec![charger; 4],
             heat_pumps: vec![HeatPumpSim {
                 rated_kw: 14.0,
                 min_kw: 3.0,
                 limit_kw: 14.0,
+                ext_power_kw: None,
+                last_ext_write_s: f64::NEG_INFINITY,
+                setpoint_c: thermostat_setpoint_c(start_s),
                 demand_kw: 0.0,
                 power_kw: 0.0,
                 online: true,
+                cycle_on: false,
             }],
             batteries: vec![BatterySim {
                 capacity_kwh: 100.0,
@@ -184,21 +325,35 @@ impl SiteSim {
                 last_setpoint_s: start_s,
                 online: true,
             }],
+            building: Building { indoor_c: thermostat_setpoint_c(start_s), ua_kw_per_k: 1.2, cap_kwh_per_k: 18.0 },
             meter_online: true,
             base_kw: 18.0,
             next_arrival: 0,
             arrivals,
+            departures: Vec::new(),
+            cloud_day: vec![0.92; SIM_DAYS],
             cloud: 1.0,
-            rng: seed.max(1),
+            rng: cfg.seed.max(1),
         };
-        // Cars that arrived before the start are plugged in right away, and
-        // the inverters start at the output the sun allows (no ramp from 0).
+        if cfg.weather == Weather::Random {
+            for d in 0..SIM_DAYS {
+                let (u, r) = (sim.uniform(), sim.uniform());
+                sim.cloud_day[d] = sim.climate.draw_cloudiness(u, r);
+            }
+        }
+        sim.cloud = sim.cloud_day[sim.day()];
+        // Cars already plugged in at the start, inverters at the output the
+        // sun allows (no ramp from 0).
         sim.step(0.0);
         let solar = sim.solar_fraction();
         for inv in &mut sim.inverters {
             inv.output_kw = inv.rated_kw * solar;
         }
         sim
+    }
+
+    pub fn day(&self) -> usize {
+        ((self.t_s / 86_400.0).floor().max(0.0) as usize).min(SIM_DAYS - 1)
     }
 
     pub fn pv_installed_kw(&self) -> f64 {
@@ -232,19 +387,18 @@ impl SiteSim {
         self.base_kw + self.chargers_kw() + self.heat_pumps_kw() + self.batteries_kw() - self.pv_kw()
     }
 
-    /// Outdoor temperature, °C: 3 °C before sunrise to 15 °C mid-afternoon.
     pub fn outdoor_c(&self) -> f64 {
-        let day = (self.t_s / 3600.0 - 15.0) / 24.0 * std::f64::consts::TAU;
-        9.0 + 6.0 * day.cos()
+        self.climate.outdoor_c(self.t_s)
     }
 
     /// PV available from the sun (before any limit), fraction of installed power.
     pub fn solar_fraction(&self) -> f64 {
-        if self.t_s <= SUNRISE_S || self.t_s >= SUNSET_S {
-            return 0.0;
-        }
-        let x = (self.t_s - SUNRISE_S) / (SUNSET_S - SUNRISE_S);
-        0.82 * (std::f64::consts::PI * x).sin().powf(1.4) * self.cloud
+        self.climate.clear_sky_fraction(self.t_s) * self.cloud
+    }
+
+    /// Current cloudiness factor (1 = clear sky).
+    pub fn cloudiness(&self) -> f64 {
+        self.cloud
     }
 
     fn noise(&mut self) -> f64 {
@@ -256,19 +410,27 @@ impl SiteSim {
         (v >> 11) as f64 / (1u64 << 52) as f64 - 1.0
     }
 
+    fn uniform(&mut self) -> f64 {
+        (self.noise() + 1.0) / 2.0
+    }
+
     /// Advances the physics by `dt_s` seconds.
     pub fn step(&mut self, dt_s: f64) {
         self.t_s += dt_s;
         let t = self.t_s;
         let hours = dt_s / 3600.0;
 
-        // Weather: slow cloud random walk between 55% and 100% of clear sky.
+        // Weather: a slow cloud random walk around the day's cloudiness.
+        let aim = self.cloud_day[self.day()];
+        let (lo, hi) = match self.weather {
+            Weather::Fair => (0.55, 1.0),
+            Weather::Random => ((aim - 0.3).max(0.05), (aim + 0.2).min(1.0)),
+        };
         let n = self.noise();
-        self.cloud = (self.cloud + n * 0.01 * dt_s.sqrt() + (0.92 - self.cloud) * 0.002 * dt_s).clamp(0.55, 1.0);
+        self.cloud = (self.cloud + n * 0.01 * dt_s.sqrt() + (aim - self.cloud) * 0.002 * dt_s).clamp(lo, hi);
 
         // Base load: office, lighting, cold storage. Higher 07:00–18:00.
-        let working = (7.0..18.0).contains(&(t / 3600.0 % 24.0));
-        let target = if working { 26.0 } else { 16.0 };
+        let target = if working_hours(t) { 26.0 } else { 16.0 };
         let n = self.noise();
         self.base_kw += (target - self.base_kw) * (0.01 * dt_s).min(1.0) + n * 0.3 * dt_s.sqrt().min(3.0);
         self.base_kw = self.base_kw.clamp(10.0, 40.0);
@@ -286,13 +448,36 @@ impl SiteSim {
             inv.energy_wh += inv.output_kw * 1000.0 * hours;
         }
 
-        // Cars arrive, charge at min(limit, car maximum), leave the plug when full.
+        // Cars leave at their departure time, full or not, and arrive at free chargers.
+        for (i, c) in self.chargers.iter_mut().enumerate() {
+            if let Some(car) = &c.car
+                && t >= car.departure_s
+            {
+                self.departures.push(DepartureLog {
+                    at_s: car.departure_s,
+                    charger: i,
+                    needs_kwh: car.needs_kwh,
+                    charged_kwh: car.charged_kwh,
+                });
+                c.car = None;
+            }
+        }
         while self.next_arrival < self.arrivals.len() && self.arrivals[self.next_arrival].at_s <= t {
             let a = self.arrivals[self.next_arrival];
-            if let Some(c) = self.chargers.get_mut(a.charger) {
-                c.car = Some(Car { max_current_a: a.max_current_a, needs_kwh: a.needs_kwh, charged_kwh: 0.0 });
-            }
             self.next_arrival += 1;
+            if a.departure_s <= t {
+                continue; // left before the simulation reached it
+            }
+            if let Some(c) = self.chargers.get_mut(a.charger)
+                && c.car.is_none()
+            {
+                c.car = Some(Car {
+                    max_current_a: a.max_current_a,
+                    needs_kwh: a.needs_kwh,
+                    charged_kwh: 0.0,
+                    departure_s: a.departure_s,
+                });
+            }
         }
         for c in &mut self.chargers {
             let limit = if c.in_failsafe(t) { c.failsafe_a } else { c.limit_a };
@@ -317,13 +502,41 @@ impl SiteSim {
             b.soc_pct = (b.soc_pct + p * hours / b.capacity_kwh * 100.0).clamp(0.0, 100.0);
         }
 
-        // Heat pump: demand from outdoor temperature (never below what the
-        // compressor can modulate down to), capped by its limit.
+        // Heat pump and building.
         let outdoor = self.outdoor_c();
+        let gains = Building::gains_kw(t);
+        let cop_now = cop(outdoor);
+        let b = self.building;
+        let mut heat_kw = 0.0;
         for hp in &mut self.heat_pumps {
-            hp.demand_kw = (hp.rated_kw * ((16.0 - outdoor) / 20.0)).clamp(0.25 * hp.rated_kw, hp.rated_kw);
-            hp.power_kw = if hp.limit_kw >= hp.min_kw { hp.demand_kw.min(hp.limit_kw) } else { 0.0 };
+            hp.setpoint_c = thermostat_setpoint_c(t);
+            let sp = hp.setpoint_c;
+            // The unit's own comfort guard overrides the EMS below
+            // setpoint − 3 K and above 24 °C.
+            let guard = b.indoor_c < sp - 3.0 || b.indoor_c > 24.0;
+            let external = hp.external(t) && !guard;
+            let thermostat_kw =
+                ((b.ua_kw_per_k * (sp - outdoor) - gains + THERMOSTAT_GAIN_KW_PER_K * (sp - b.indoor_c)) / cop_now)
+                    .clamp(0.0, hp.rated_kw);
+            hp.demand_kw = if external { hp.ext_power_kw.unwrap_or(0.0).min(hp.rated_kw) } else { thermostat_kw };
+            // Below the minimum modulation the compressor cycles.
+            let run = if hp.demand_kw >= hp.min_kw {
+                hp.demand_kw
+            } else if external {
+                if hp.demand_kw >= hp.min_kw / 2.0 { hp.min_kw } else { 0.0 }
+            } else {
+                if b.indoor_c < sp - 0.3 {
+                    hp.cycle_on = true;
+                } else if b.indoor_c > sp + 0.3 {
+                    hp.cycle_on = false;
+                }
+                if hp.cycle_on { hp.min_kw } else { 0.0 }
+            };
+            hp.power_kw = if hp.limit_kw >= hp.min_kw { run.min(hp.limit_kw) } else { 0.0 };
+            heat_kw += cop_now * hp.power_kw;
         }
+        let bld = &mut self.building;
+        bld.indoor_c += hours / bld.cap_kwh_per_k * (heat_kw + gains - bld.ua_kw_per_k * (bld.indoor_c - outdoor));
     }
 
     fn online(&self, dev: DeviceId) -> bool {
@@ -413,6 +626,10 @@ impl SiteSim {
                     let hp = &mut self.heat_pumps[i];
                     match a {
                         heat_pump::POWER_LIMIT => hp.limit_kw = (v as f64 / 10.0).min(hp.rated_kw),
+                        heat_pump::EXT_POWER => {
+                            hp.ext_power_kw = (v != heat_pump::EXT_NONE).then(|| v as f64 / 10.0);
+                            hp.last_ext_write_s = t;
+                        }
                         _ => return Err(Exception::IllegalDataAddress),
                     }
                 }
@@ -507,6 +724,12 @@ impl SiteSim {
         r[evse::MAX_CURRENT as usize] = (c.max_current_a * 10.0) as u16;
         r[evse::FAILSAFE_CURRENT as usize] = (c.failsafe_a * 10.0) as u16;
         r[evse::FAILSAFE_TIMEOUT as usize] = c.failsafe_timeout_s as u16;
+        let request = c.car.as_ref().map_or(0.0, |car| car.needs_kwh * 1000.0);
+        r[evse::ENERGY_REQUEST as usize..evse::ENERGY_REQUEST as usize + 2]
+            .copy_from_slice(&u32_to_regs(request as u32));
+        r[evse::DEPARTURE_MIN as usize] = c.car.as_ref().map_or(evse::NO_DEPARTURE, |car| {
+            ((car.departure_s - self.t_s) / 60.0).floor().clamp(0.0, (evse::NO_DEPARTURE - 1) as f64) as u16
+        });
         r
     }
 
@@ -515,6 +738,8 @@ impl SiteSim {
         let mut r = vec![0u16; heat_pump::LEN as usize];
         r[heat_pump::STATUS as usize] = if hp.power_kw == 0.0 {
             heat_pump::STATUS_OFF
+        } else if hp.external(self.t_s) {
+            heat_pump::STATUS_EXTERNAL
         } else if hp.power_kw < hp.demand_kw - 0.05 {
             heat_pump::STATUS_LIMITED
         } else {
@@ -524,11 +749,16 @@ impl SiteSim {
         r[heat_pump::POWER as usize] = (hp.power_kw * 10.0).round() as u16;
         r[heat_pump::DEMAND as usize] = (hp.demand_kw * 10.0).round() as u16;
         r[heat_pump::RATED as usize] = (hp.rated_kw * 10.0).round() as u16;
+        r[heat_pump::INDOOR as usize] = tenths_i16(self.building.indoor_c);
+        r[heat_pump::OUTDOOR as usize] = tenths_i16(self.outdoor_c());
+        r[heat_pump::SETPOINT as usize] = tenths_i16(hp.setpoint_c);
+        r[heat_pump::EXT_POWER as usize] = match hp.ext_power_kw {
+            Some(p) if hp.external(self.t_s) => (p * 10.0).round() as u16,
+            _ => heat_pump::EXT_NONE,
+        };
         r
     }
-}
 
-impl SiteSim {
     fn battery_image(&self, i: usize) -> Vec<u16> {
         let b = &self.batteries[i];
         let mut r = vec![0u16; battery::LEN as usize];
@@ -617,6 +847,41 @@ mod tests {
     }
 
     #[test]
+    fn chargers_report_energy_request_and_departure() {
+        let sim = SiteSim::depot(17.5 * 3600.0, 7);
+        let regs = sim.read(DeviceId::Charger(2), 0, evse::LEN).unwrap(); // evening-shift van
+        assert_eq!(regs_to_u32(&regs[evse::ENERGY_REQUEST as usize..]), 40_000);
+        assert_eq!(regs[evse::DEPARTURE_MIN as usize], 180, "leaves at 20:30");
+        let empty = sim.read(DeviceId::Charger(0), 0, evse::LEN);
+        assert!(empty.is_ok());
+    }
+
+    #[test]
+    fn cars_leave_at_departure_and_unmet_energy_is_logged() {
+        let mut sim = SiteSim::depot(16.7 * 3600.0, 7);
+        for i in 0..4 {
+            sim.write(DeviceId::Charger(i), evse::CURRENT_LIMIT, &[0]).unwrap(); // nobody charges
+        }
+        while sim.t_s < 21.0 * 3600.0 {
+            sim.step(10.0);
+        }
+        let van = sim.departures.iter().find(|d| d.charger == 2).expect("evening van left");
+        assert_eq!(van.needs_kwh, 40.0);
+        assert!((van.unmet_kwh() - 40.0).abs() < 1e-9);
+        assert!(sim.chargers[2].car.is_none());
+    }
+
+    #[test]
+    fn the_fleet_comes_back_the_next_day() {
+        let mut sim = SiteSim::depot(6.0 * 3600.0, 7);
+        while sim.t_s < 86_400.0 + 9.0 * 3600.0 {
+            sim.step(30.0);
+        }
+        assert!(sim.chargers[2].car.is_some(), "the 08:30 visitor on day 1");
+        assert!(sim.departures.len() >= 7, "{}", sim.departures.len());
+    }
+
+    #[test]
     fn battery_follows_setpoint_and_goes_idle_without_controller() {
         let mut sim = SiteSim::depot(20.0 * 3600.0, 7);
         let b = DeviceId::Battery(0);
@@ -652,6 +917,52 @@ mod tests {
         let r = sim.read(DeviceId::Inverter(0), av.body, 2).unwrap();
         let avail = sunspec::scaled(r[0] as i16, r[1] as i16) / 1000.0;
         assert!(avail > 30.0 && sim.inverters[0].output_kw <= 12.0 + 1e-9, "{avail}");
+    }
+
+    #[test]
+    fn thermostat_holds_the_building_and_ems_can_take_over() {
+        let mut sim = SiteSim::new(SimConfig::new(9.0 * 3600.0, 7, Season::Winter, Weather::Fair));
+        for _ in 0..(3 * 360) {
+            sim.step(10.0);
+        }
+        let t = sim.building.indoor_c;
+        assert!((t - 21.0).abs() < 0.5, "thermostat keeps ~21 °C: {t}");
+        let hp_kw = sim.heat_pumps[0].power_kw;
+        assert!(hp_kw > 3.0, "winter needs heat: {hp_kw}");
+
+        // The EMS pre-heats at full power for an hour.
+        for _ in 0..360 {
+            sim.write(DeviceId::HeatPump(0), heat_pump::EXT_POWER, &[140]).unwrap();
+            sim.step(10.0);
+        }
+        assert!(sim.building.indoor_c > t + 0.7, "{}", sim.building.indoor_c);
+        let regs = sim.read(DeviceId::HeatPump(0), 0, heat_pump::LEN).unwrap();
+        assert_eq!(regs[heat_pump::STATUS as usize], heat_pump::STATUS_EXTERNAL);
+        assert!(regs[heat_pump::INDOOR as usize] as i16 > 215);
+
+        // A silent EMS hands control back to the thermostat after 15 minutes.
+        for _ in 0..100 {
+            sim.step(10.0);
+        }
+        assert!(!sim.heat_pumps[0].external(sim.t_s));
+    }
+
+    #[test]
+    fn comfort_guard_overrides_an_ems_that_starves_the_building() {
+        let mut sim = SiteSim::new(SimConfig::new(9.0 * 3600.0, 7, Season::Winter, Weather::Fair));
+        for _ in 0..(8 * 360) {
+            sim.write(DeviceId::HeatPump(0), heat_pump::EXT_POWER, &[0]).unwrap();
+            sim.step(10.0);
+        }
+        assert!(sim.building.indoor_c > 17.5, "guard at setpoint − 3 K: {}", sim.building.indoor_c);
+    }
+
+    #[test]
+    fn random_weather_varies_from_day_to_day() {
+        let sim = SiteSim::new(SimConfig::new(0.0, 11, Season::Spring, Weather::Random));
+        let spread =
+            sim.cloud_day.iter().cloned().fold(0.0f64, f64::max) - sim.cloud_day.iter().cloned().fold(1.0f64, f64::min);
+        assert!(spread > 0.2, "{:?}", sim.cloud_day);
     }
 
     #[test]
