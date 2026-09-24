@@ -203,6 +203,21 @@ Two changes brought these bursts down:
 
 A larger `margin_kw` would remove the rest, at the cost of some charging power in every dimming.
 
+## Live operation in the gateway
+
+The gateway runs the same planner, through the same code that builds its input (the `planning` crate), on live data. The study's forecaster is replaced by the following:
+
+| Input | In the gateway |
+|---|---|
+| Day-ahead prices | ENTSO-E Transparency Platform (document A44, the coupling auction; 15-minute products in DE-LU and AT, hourly in CH), or Energy-Charts without an ENTSO-E token. Until tomorrow's prices are published (around 13:00), the plan assumes yesterday's for those hours. |
+| PV | Open-Meteo's 15-minute irradiance on the plane of the modules and air temperature, turned into AC power: kWp × irradiance / 1000 W/m² × performance ratio, less 0.4%/K of cell temperature above 25 °C. A nowcast scales it by the ratio of what the inverters can deliver now to what the forecast expected. That ratio fades back to 1 over about two hours into the plan. Uncertainty: σ = 15% of the forecast + 2% of installed power; worst case 35% of the forecast. |
+| Base load | Learned for each quarter-hour of working days and weekends, as an exponential average over days (weight 0.2). Its misses give σ, with a floor of 0.5 kW. Until a quarter-hour has been seen, the plan uses the load measured now. A heat pump the plan does not schedule counts as base load. |
+| Demand charge | The full price per kW of the billing period (year or month) on the part of the peak above the highest quarter-hour metered so far, or above a configured floor (the peak the site reaches anyway). |
+| Dimming | A dimming in progress is expected to last up to 2 hours (the preventive-control cap). Windows the DSO has announced as recurring can be configured. |
+| Building | UA, thermal capacity, internal gains, the comfort band by time of day and a linear COP model, from the configuration; the indoor temperature from the heat pump. |
+
+Plans start at the current quarter-hour, so they line up with the 15-minute prices and the billing meter. The control loop never waits for the network or the solver; a plan older than an hour is dropped and the rules take over.
+
 ## Notes on common claims
 
 These came up while designing the planner. Each was checked against the sources linked in the [README](../README.md).
@@ -228,4 +243,4 @@ These came up while designing the planner. Each was checked against the sources 
 - **Two real price days.** Each season has one day of prices, repeated. The weather varies across seeds, the prices do not. The savings depend strongly on the price spread, and 20 January 2025 had an unusually high evening peak.
 - **The control cycle is 5 s in the study**, to keep 720 runs fast; the gateway's is 1 s.
 - **The demand charge is a proxy.** Real bills use the highest quarter-hour of the month or year. The study charges each run its share of a year on its own peak, as if every day of the billing period looked like it. In operation, the planner takes the billing period's running peak and the full price instead (`DemandCharge::peak_so_far_kw`).
-- **Not yet in the gateway binary.** See the README.
+- **Live forecasts are simple.** One plane of modules, a base-load profile that needs a few days to learn, and building parameters that must come from data. See "Live operation" above and the README.

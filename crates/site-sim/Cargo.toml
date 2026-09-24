@@ -6,5 +6,6 @@ license.workspace = true
 
 [dependencies]
 devices = { version = "0.1.0", path = "../devices" }
+planning = { version = "0.1.0", path = "../planning" }
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-modbus = { version = "0.17.0", default-features = false, features = ["tcp-server", "tcp"] }

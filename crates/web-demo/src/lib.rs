@@ -447,7 +447,7 @@ impl Demo {
         let step_h = closedloop::runner::PLAN_STEP_H;
         let cap = self.cl.sim.batteries[0].capacity_kwh;
         let out = PlanOut {
-            start_h: rec.made_at_s / 3600.0,
+            start_h: rec.start_s / 3600.0,
             step_h,
             grid_kw: p.grid_kw.clone(),
             battery_kw: p.battery_kw.clone(),
@@ -457,7 +457,7 @@ impl Demo {
             ev_kw: (0..n).map(|k| p.ev_kw.iter().map(|v| v[k]).sum()).collect(),
             dim: p.dim_budget_kw.iter().map(Option::is_some).collect(),
             price_eur_mwh: (0..n)
-                .map(|k| self.cl.sim.climate.day_ahead_eur_mwh(rec.made_at_s + (k as f64 + 0.5) * step_h * 3600.0))
+                .map(|k| self.cl.sim.climate.day_ahead_eur_mwh(rec.start_s + (k as f64 + 0.5) * step_h * 3600.0))
                 .collect(),
         };
         serde_json::to_string(&out).unwrap_or_default()

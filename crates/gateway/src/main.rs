@@ -1,17 +1,21 @@
 //! grid-edge-gateway: site controller between a DSO control centre
 //! (IEC 60870-5-104) and the field devices of a prosumer site (Modbus TCP,
-//! SunSpec), under German, Austrian or Swiss rules.
+//! SunSpec), under German, Austrian or Swiss rules, with an optional
+//! planning layer (MPC) on day-ahead prices and a weather forecast.
 //! Usage: `gateway [path/to/gateway.toml]`.
 
 mod api;
 mod config;
 mod dso;
+mod ems;
 mod field;
+mod market;
 mod persist;
 mod readings;
 mod snapshot;
 #[cfg(feature = "tls")]
 mod tls;
+mod weather;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -66,6 +70,33 @@ async fn main() {
     }
     info!("consumption floor while dimmed: {:.2} kW", controller.floor_kw());
 
+    // Planning layer
+    let ems = match &cfg.planner {
+        Some(p) if p.enabled => {
+            let state = path.with_file_name("planner-state.json");
+            let e = ems::Ems::new(
+                p.clone(),
+                site.clone(),
+                controller.floor_kw(),
+                cfg.jurisdiction().expect("validated"),
+                ems::load(&state),
+                now_ms() as f64 / 1000.0,
+            );
+            info!(
+                "planner on: prices from {}, {}",
+                p.prices.sources.join(" or "),
+                if p.weather.is_some() { "PV forecast from Open-Meteo" } else { "no PV forecast" }
+            );
+            let e = Arc::new(Mutex::new(e));
+            ems::spawn(e.clone(), state);
+            Some(e)
+        }
+        _ => {
+            info!("planner off: rules only");
+            None
+        }
+    };
+
     let field: field::Shared = Arc::new(Mutex::new(FieldState {
         inverters: vec![Slot::default(); cfg.inverters.len()],
         meter_kw: Slot::default(),
@@ -105,7 +136,7 @@ async fn main() {
     spawn_iec104(listener, station, cfg.iec104.tls.clone());
 
     // Dashboard API
-    let app = api::router(snapshot_rx, frames_tx, cfg.api.web_root.clone());
+    let app = api::router(snapshot_rx, frames_tx, cfg.api.web_root.clone(), ems.clone());
     let api_listener = TcpListener::bind(cfg.api.bind).await.unwrap_or_else(|e| {
         error!("API bind {}: {e}", cfg.api.bind);
         std::process::exit(1)
@@ -152,7 +183,16 @@ async fn main() {
             day: now.div_euclid(86_400_000),
             year: 2000 + Cp56Time2a::from_unix_ms(now).year as i32,
         };
+        let unix_s = now as f64 / 1000.0;
+        if let Some(e) = &ems {
+            controller.set_guidance(e.lock().unwrap().guidance(unix_s));
+        }
         let (sp, st) = controller.step(&clock, &cmd, &readings);
+        let planner = ems.as_ref().map(|e| {
+            let mut e = e.lock().unwrap();
+            e.observe(unix_s, &readings, st.base_load_kw, st.mode == Mode::Dimmed);
+            e.view(unix_s)
+        });
 
         // Devices get one staleness window to answer before we complain.
         if st.fallbacks != last_fallbacks && t0.elapsed() > stale {
@@ -227,6 +267,7 @@ async fn main() {
             refusals: st.refusals.iter().map(readings::refusal_name).collect(),
             fallbacks: st.fallbacks.iter().map(readings::fallback_name).collect(),
             cycle_ms,
+            planner,
         };
         setpoints_tx.send_replace(sp);
         snapshot_tx.send_replace(snap);

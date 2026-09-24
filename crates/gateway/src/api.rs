@@ -2,9 +2,11 @@
 //! command it: control authority stays with the DSO link.
 //!
 //!   GET /api/snapshot   latest control cycle as JSON
+//!   GET /api/plan       the plan in force, step by step (null without one)
 //!   GET /api/ws         WebSocket: {"type":"snapshot",...} and {"type":"frame",...}
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -15,23 +17,27 @@ use serde_json::json;
 use tokio::sync::{broadcast, watch};
 use tower_http::services::ServeDir;
 
+use crate::ems::Ems;
 use crate::snapshot::{FrameLog, Snapshot};
 
 #[derive(Clone)]
 struct Api {
     snapshot: watch::Receiver<Snapshot>,
     frames: broadcast::Sender<FrameLog>,
+    ems: Option<Arc<Mutex<Ems>>>,
 }
 
 pub fn router(
     snapshot: watch::Receiver<Snapshot>,
     frames: broadcast::Sender<FrameLog>,
     web_root: Option<PathBuf>,
+    ems: Option<Arc<Mutex<Ems>>>,
 ) -> Router {
     let app = Router::new()
         .route("/api/snapshot", get(get_snapshot))
+        .route("/api/plan", get(get_plan))
         .route("/api/ws", get(ws))
-        .with_state(Api { snapshot, frames });
+        .with_state(Api { snapshot, frames, ems });
     match web_root {
         Some(dir) => app.fallback_service(ServeDir::new(dir)),
         None => app,
@@ -40,6 +46,10 @@ pub fn router(
 
 async fn get_snapshot(State(api): State<Api>) -> Json<Snapshot> {
     Json(api.snapshot.borrow().clone())
+}
+
+async fn get_plan(State(api): State<Api>) -> Json<serde_json::Value> {
+    Json(api.ems.as_ref().map_or(serde_json::Value::Null, |e| e.lock().unwrap().plan_json()))
 }
 
 async fn ws(upgrade: WebSocketUpgrade, State(api): State<Api>) -> impl IntoResponse {

@@ -9,4 +9,5 @@ pub mod metrics;
 pub mod runner;
 
 pub use metrics::Metrics;
-pub use runner::{ClosedLoop, PlanRecord, Scenario, Strategy, site_config};
+pub use planning::PlanRecord;
+pub use runner::{ClosedLoop, Scenario, Strategy, site_config};

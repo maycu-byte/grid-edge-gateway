@@ -130,7 +130,7 @@ fn trace(argv: &[String]) {
         cl.advance(300.0);
         let s = &cl.sim;
         let (pg, ps) = cl.plan.as_ref().map_or((f64::NAN, f64::NAN), |p| {
-            let k = ((s.t_s - p.made_at_s) / 900.0).floor() as usize;
+            let k = p.step_at(s.t_s).unwrap_or(usize::MAX);
             (p.plan.grid_kw.get(k).copied().unwrap_or(f64::NAN), p.plan.soc_kwh.get(k + 1).copied().unwrap_or(f64::NAN))
         });
         csv.push_str(&format!(

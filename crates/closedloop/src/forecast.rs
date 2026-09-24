@@ -5,6 +5,7 @@
 
 use devices::climate::{Climate, Tariff};
 use devices::sim::{Building, cop};
+use planning::Horizon;
 
 /// Std of today's cloudiness once it has been observed for a while.
 const NOWCAST_STD: f64 = 0.08;
@@ -14,17 +15,6 @@ const NOWCAST_TAU_S: f64 = 1800.0;
 const BASE_WORK_KW: f64 = 26.0;
 const BASE_OFF_KW: f64 = 16.0;
 pub const BASE_SIGMA_KW: f64 = 1.5;
-
-/// Everything time-dependent the planner needs for one horizon.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Horizon {
-    pub forecast: planner::Forecast,
-    pub outdoor_c: Vec<f64>,
-    pub cop: Vec<f64>,
-    pub gains_kw: Vec<f64>,
-    pub t_min_c: Vec<f64>,
-    pub t_max_c: Vec<f64>,
-}
 
 #[derive(Debug, Clone)]
 pub struct Forecaster {
@@ -85,6 +75,7 @@ impl Forecaster {
             price_export_eur_kwh: Vec::with_capacity(steps),
         };
         let mut h = Horizon {
+            dt_h,
             forecast: planner::Forecast { ..f.clone() },
             outdoor_c: Vec::with_capacity(steps),
             cop: Vec::with_capacity(steps),

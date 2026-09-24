@@ -1,6 +1,6 @@
 # Grid Edge Gateway
 
-**A site controller in Rust between a grid operator and a prosumer site in Germany, Austria or Switzerland: IEC 60870-5-104 towards the DSO, SunSpec Modbus towards PV, chargers, heat pump and battery, each country's rules for dimming and feed-in limits in between — and a model-predictive planner on top that schedules the site against real day-ahead prices, a demand charge, departure times and the building's thermal mass.**
+**A site controller in Rust between a grid operator and a prosumer site in Germany, Austria or Switzerland: IEC 60870-5-104 towards the DSO, SunSpec Modbus towards PV, chargers, heat pump and battery, each country's rules for dimming and feed-in limits in between — and a model-predictive planner on top that schedules the site against live day-ahead prices (ENTSO-E or Energy-Charts), a weather forecast (Open-Meteo), a demand charge, departure times and the building's thermal mass.**
 
 **[Open the live demo →](https://maycu-byte.github.io/grid-edge-gateway/)** The demo runs this code in your browser, compiled to WebAssembly — the planner's quadratic program included. You play the grid operator: pick the country, the day and the controller, send the commands and watch the site respond, frame by frame, next to a copy of the same site running on rules alone.
 
@@ -84,6 +84,7 @@ Commands support direct execute and select-before-operate. Unknown addresses, ty
 | A contract's day limit or a budget is used up | The command is refused, the refusal is reported (2006 / 2007), and an emergency still overrides it. |
 | Control loop too slow | Cycles longer than the period are counted and logged; the cycle time is in the API. |
 | Configuration mistakes | Validated at start: unknown country, contract settings for DE, caps outside 0–100%, a failsafe current a car would not accept, and more. |
+| Price or weather feed down | The planner falls back to the other price source, then to the last prices it has (yesterday's for hours not yet published) and the last forecast. Without any prices it stops planning and the site runs on rules. The error shows in `/api/snapshot`. |
 | Someone else reaches port 2404 | With TLS on, the station accepts only client certificates signed by the DSO's CA (TLS 1.2/1.3, in the spirit of IEC 62351-3). |
 
 ## The planning layer
@@ -97,7 +98,7 @@ Rules keep the site legal; they do not make it cheap. On top of the real-time co
 - real day-ahead prices;
 - a demand charge on the highest quarter-hour.
 
-It takes about 16 ms to solve, in Rust, in the gateway's crates and in the browser. The real-time layer follows the plan only as far as the rules allow.
+It takes about 16 ms to solve, in Rust: in the gateway, in the study and in the browser. The real-time layer follows the plan only as far as the rules allow.
 
 A Monte Carlo study compares it with plain rules on the depot: 30 random-weather days each in spring and winter, on real German day-ahead prices, with the DSO dimming from 17:30 to 19:30.
 
@@ -111,6 +112,18 @@ A Monte Carlo study compares it with plain rules on the depot: 30 random-weather
 
 In every run, every car left with the energy it asked for. The value comes from prices, the peak and the building's thermal mass, not from hedging forecast errors. The real-time layer absorbs those errors, and §14a guarantees a floor. With an afternoon dimming, the chance-constrained reserve cost 5 € a day in spring, and its only return was a few seconds less above the floor. The formulation, the study design, all the numbers and the limits are in **[docs/mpc.md](docs/mpc.md)**.
 
+### In the gateway
+
+With a `[planner]` section in its configuration ([example](examples/gateway-de-planner.toml)), the gateway plans on live data. A background task does the work; the 1 s control loop only reads the plan's guidance for the current quarter-hour, which takes about 0.1 ms, and never waits for the network or the solver. The task:
+
+- **Prices.** It fetches day-ahead prices for the bidding zone (DE-LU, AT or CH) from the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu/). Without an ENTSO-E token it uses [Energy-Charts](https://api.energy-charts.info/) (Fraunhofer ISE, SMARD data). DE-LU and AT trade 15-minute products since October 2025; Switzerland stays hourly. Tomorrow's prices are published around 13:00.
+- **Weather.** It fetches [Open-Meteo](https://open-meteo.com/)'s forecast of irradiance on the plane of the modules and outdoor temperature, in 15-minute steps. It turns that into PV power and corrects it with a nowcast from what the inverters report.
+- **Learning and metering.** It learns the site's base load for each quarter-hour of working days and weekends. It meters the billing period's highest quarter-hour for the demand charge.
+- **Re-planning.** It re-plans at every quarter-hour, and when a car plugs in or leaves, when the DSO starts or ends a dimming, and when new prices arrive.
+- **Serving and keeping state.** It serves the plan at `/api/plan` and its status in `/api/snapshot`. Across restarts it keeps what it learned, the billing peak, and the last prices and forecast.
+
+Without prices, or with a plan older than an hour, the site runs on rules alone. The rules never depend on the plan.
+
 ## How it is built
 
 | Crate | What it is |
@@ -118,26 +131,34 @@ In every run, every car left with the energy it asked for. The value comes from 
 | [`iec104`](crates/iec104) | IEC 60870-5-104 from scratch, with no dependencies: APDU framing, the ASDUs above plus clock sync and interrogation, CP56Time2a, and the controlled-station link layer (k/w windows, t1/t2/t3 timers, 15-bit sequence numbers) as a **sans-IO state machine**, so every timing rule is unit-tested without sleeping. An optional tokio driver runs it over TCP or TLS. |
 | [`control`](crates/control) | The real-time layer: country policies (`policy.rs`), running totals (`accounting.rs`) and the controller, pure functions and a small state machine. It takes a plan as guidance and enforces every rule after it. The same code runs in the gateway, in the tests and in the browser. |
 | [`planner`](crates/planner) | The planning layer: the site's next 24 hours as a convex quadratic program, solved with [Clarabel](https://github.com/oxfordcontrol/Clarabel.rs) (interior point, pure Rust, also in WebAssembly). Battery with losses and ageing, a first-order thermal model of the building, each car's request, the expected dimming window, a demand charge, and deterministic, chance-constrained or robust handling of forecast errors. See [docs/mpc.md](docs/mpc.md). |
+| [`planning`](crates/planning) | The glue between the site and the optimiser, shared by the gateway, the study and the browser, so all three plan the same way. It builds the planner's input from what the devices report, turns a plan into guidance for the real-time layer, learns the base-load profile, meters the quarter-hour peak, and keeps Central European time, summer time included, without a time-zone database. |
 | [`closedloop`](crates/closedloop) | The simulated depot, the register adapter, the real-time controller and the planner with its forecaster, wired into one loop; and the [`study`](crates/closedloop/src/bin/study.rs) binary, a Monte Carlo comparison of the strategies. |
 | [`devices`](crates/devices) | SunSpec register layouts (models 1, 103, 120, 123, 203 and a vendor model), typical wallbox, heat-pump and battery maps with watchdogs, and a deterministic simulation of the depot over several days: PV under random cloudiness, the building's heat balance, battery losses, a van fleet with arrival and departure times, and real German day-ahead prices for a spring and a winter day. |
-| [`gateway`](crates/gateway) | The binary: one supervised task per Modbus device (SunSpec discovery by walking the model chain, reconnect, staleness detection), a 1 s control loop, the IEC 104 station, TLS (rustls), persistence and a read-only JSON/WebSocket API. |
-| [`site-sim`](crates/site-sim) | Every device of the depot as its own Modbus TCP server, with an HTTP endpoint to take devices offline. |
+| [`gateway`](crates/gateway) | The binary: one supervised task per Modbus device (SunSpec discovery by walking the model chain, reconnect, staleness detection), a 1 s control loop, the IEC 104 station, TLS (rustls), persistence and a read-only JSON/WebSocket API. The planning layer's live feeds are here too: ENTSO-E and Energy-Charts day-ahead prices, and the Open-Meteo forecast. |
+| [`site-sim`](crates/site-sim) | Every device of the depot as its own Modbus TCP server, with an HTTP endpoint to take devices offline. With `--start now`, its sun is at today's hour, for runs against live prices and weather. |
 | [`web-demo`](crates/web-demo) | The browser build: the closed loop (planner included) + IEC 104 encoder in WebAssembly, with a rules-only copy of the site alongside for comparison. The controller reads and writes the simulated devices through their register maps, like the gateway does over Modbus TCP. |
 
 ## Testing
 
-- **120 Rust tests.** They cover:
+- **142 Rust tests.** They cover:
   - protocol frames checked against reference octets, every link-layer timer and window, sequence-number wrap-around;
   - the Pmin formula for several device mixes, allocation scenarios, each country's rules, day and year roll-over of the totals, the battery, plausibility checks, ramps and config validation;
   - three property tests over 45,000 random site states and plans. While dimmed, in every country, with a battery and whatever the plan says, the loads never get more than the floor + PV surplus + battery discharge. Every charger current is 0 or 6–32 A in whole amps;
   - the planner: price-driven battery use, charging before departure in the cheapest hours, pre-heating before a dimming, the dimming constraint, the demand charge, uncertainty reserves, a full day with four cars;
   - how the real-time layer follows a plan: least slack first, the departure guard, the heat pump's request, a passing cloud during a dimming;
   - the closed loop: every strategy through an evening dimming, and the planner saving money without raising the peak;
+  - live planning in the gateway:
+    - ENTSO-E documents (curve type A03, 15-minute and hourly products, error answers), and Energy-Charts and Open-Meteo answers;
+    - the price book's fallbacks and PV power from irradiance;
+    - the nowcast and base-load learning;
+    - billing-peak metering and restarts;
+    - Central European summer time;
   - the site simulation: register maps and watchdogs, the thermostat and an EMS taking it over (with the heat pump's own comfort guard), departures and unmet energy, day-to-day weather, prices in local time.
-- **17 interoperability tests** ([`interop/`](interop/test_interop.py)). They start the real simulator and gateway and drive them with [c104](https://github.com/Fraunhofer-FIT-DIEN/iec104-python), a Python binding of lib60870, as the DSO control centre. They cover:
+- **18 interoperability tests** ([`interop/`](interop/test_interop.py)). They start the real simulator and gateway and drive them with [c104](https://github.com/Fraunhofer-FIT-DIEN/iec104-python), a Python binding of lib60870, as the DSO control centre. They cover:
   - general interrogation, §14a compliance within seconds, gradual release and negative confirmations;
   - meter loss, a battery gone silent, the emergency command and the link-loss policy;
   - persistence across a restart, the Austrian 70% cap and the Swiss 3% budget running out;
+  - the planner in the running gateway: it moves the overnight vans' charging to cheap hours, and the Pmin floor holds when the DSO dims;
   - TLS acceptance and rejection.
 - CI runs `fmt`, `clippy -D warnings`, all tests and the interop suite on every push, then builds the WebAssembly demo and deploys it to GitHub Pages.
 
@@ -162,6 +183,22 @@ python -m pytest -v interop
 
 To enable TLS, uncomment `[iec104.tls]` in `gateway.toml`. For the browser demo, run `web/build.sh`, which needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` 0.2.128.
 
+The gateway with the planner, on live prices and weather:
+
+```sh
+./target/debug/site-sim --start now                                        # the simulated sun at today's hour
+ENTSOE_TOKEN=... ./target/debug/gateway examples/gateway-de-planner.toml   # without the token: Energy-Charts
+curl localhost:8080/api/plan                                               # the plan in force
+```
+
+To get an ENTSO-E token:
+
+1. Register on the Transparency Platform.
+2. Ask for API access by e-mail to transparency@entsoe.eu, with "Restful API access" as the subject.
+3. The token then appears in your account settings.
+
+The token is read only from the environment and never written to a log.
+
 The planner study (a few minutes on a laptop):
 
 ```sh
@@ -177,7 +214,13 @@ cargo run --release -p closedloop --bin study -- trace winter 1 mpc trace.csv   
 - **Signal path.** In German households the §14a signal usually travels through the smart meter gateway (CLS channel) to an FNN control box or via EEBUS. IEC 104 is the standard telecontrol path for larger plants (from 100 kW). This project uses IEC 104 for all commands to keep one DSO interface; the control logic does not depend on the transport.
 - **Protocol scope.** The IEC 104 stack implements the subset a controlled station of this kind needs, not the full companion standard (no file transfer, no redundancy groups). It is not certified; it is tested against lib60870.
 - **Clock.** Day and year boundaries for the running totals use UTC.
-- **The planner runs in the closed loop and in the browser, not yet in the gateway binary.** The gateway's real-time layer already takes guidance and reads what a plan needs from the devices (energy request and departure time from the chargers, temperatures from the heat pump). What it lacks are live inputs: day-ahead prices (e.g. the ENTSO-E transparency platform) and a PV forecast. The study's forecaster uses climatology and a nowcast instead.
+- **Live planning is simple where it can be.**
+  - **PV model.** One plane of modules per site, with a performance ratio and a temperature derating, not a full PV model.
+  - **Base load.** The profile needs a few days to learn; until then, the plan assumes the load now continues.
+  - **Building.** The UA and capacity have to be set from data.
+  - **Mid-quarter plans.** A plan made between quarter-hours treats the current quarter as a whole one.
+  - **Unpublished prices.** Until tomorrow's prices are published (around 13:00), the plan assumes yesterday's for those hours.
+  - **Tests.** The ENTSO-E parser is tested against documents in the published format, not a live answer: this repository has no token.
 - **Planner study.** The simulated building is the planner's own model (same thermal parameters), so model mismatch comes only from the forecasts; a real building would need its parameters identified first, and the gains would shrink. The rules baseline is plain (a fixed thermostat schedule with no optimum start, cars at full power on arrival). See [docs/mpc.md](docs/mpc.md#limits) for the rest.
 - **TLS interop.** The c104 2.2.1 client cannot be used for TLS here: its bundled mbedtls 3.6 refuses to verify a server without a hostname (`-0x5D80`), and the released binding cannot set one yet. The TLS tests therefore send raw IEC 104 frames through Python's `ssl` (OpenSSL).
 

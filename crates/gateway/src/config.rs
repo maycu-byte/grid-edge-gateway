@@ -24,6 +24,8 @@ pub struct Config {
     pub batteries: Vec<Battery>,
     pub iec104: Iec104,
     pub api: Api,
+    /// The planning layer (MPC); without it the site runs on rules alone.
+    pub planner: Option<Planner>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +171,216 @@ pub struct Api {
     pub web_root: Option<PathBuf>,
 }
 
+/// The planning layer: where prices and weather come from, and what the
+/// planner should weigh.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Planner {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// "deterministic", "chance" (with `epsilon`) or "robust".
+    #[serde(default = "default_uncertainty")]
+    pub uncertainty: String,
+    #[serde(default = "default_epsilon")]
+    pub epsilon: f64,
+    /// Dimming windows the DSO has announced as recurring, local time,
+    /// e.g. `["17:30-19:30"]`. A dimming in progress is always expected to
+    /// last up to 2 hours.
+    #[serde(default)]
+    pub dim_windows: Vec<String>,
+    /// Cycle ageing of the battery, € per kWh in or out.
+    #[serde(default = "default_degradation")]
+    pub battery_degradation_eur_per_kwh: f64,
+    pub prices: Prices,
+    pub weather: Option<Weather>,
+    pub demand_charge: Option<DemandCharge>,
+    /// Plan the (first) heat pump with a thermal model of the building.
+    pub building: Option<Building>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Prices {
+    /// Tried in order: "entsoe" (needs the ENTSOE_TOKEN environment
+    /// variable), "energy-charts", "file".
+    pub sources: Vec<String>,
+    /// "DE-LU", "AT" or "CH"; by default the jurisdiction's zone.
+    pub bidding_zone: Option<String>,
+    /// Grid fees, levies and taxes on top of the day-ahead price, €/kWh.
+    pub import_adder_eur_kwh: f64,
+    /// A fixed feed-in payment, €/kWh. Without it, exports earn the
+    /// day-ahead price (and nothing when it is negative).
+    pub export_fixed_eur_kwh: Option<f64>,
+    /// CSV of `start,eur_mwh` for the "file" source.
+    pub file: Option<PathBuf>,
+    #[serde(default = "default_refresh")]
+    pub refresh_s: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Weather {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub tilt_deg: f64,
+    /// 0 = south, −90 = east, 90 = west.
+    pub azimuth_deg: f64,
+    #[serde(default = "default_performance_ratio")]
+    pub performance_ratio: f64,
+    /// Open-Meteo JSON to read instead of the API.
+    pub file: Option<PathBuf>,
+    #[serde(default = "default_refresh")]
+    pub refresh_s: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DemandCharge {
+    /// Leistungspreis, € per kW of the billed peak and year.
+    pub eur_per_kw_year: f64,
+    /// "year" or "month": the period whose highest quarter-hour is billed.
+    #[serde(default = "default_billing")]
+    pub billing: String,
+    /// A peak the site reaches this period anyway: below it, new peaks cost
+    /// nothing (e.g. last year's peak, early in the year).
+    #[serde(default)]
+    pub peak_floor_kw: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Building {
+    pub ua_kw_per_k: f64,
+    pub cap_kwh_per_k: f64,
+    pub gains_day_kw: f64,
+    pub gains_night_kw: f64,
+    pub comfort_day_min_c: f64,
+    pub comfort_night_min_c: f64,
+    pub comfort_max_c: f64,
+    /// Local time the day's comfort band starts and ends, "HH:MM".
+    pub day_start: String,
+    pub day_end: String,
+    /// Heat pump efficiency: COP = cop_at_0c + cop_per_k × outdoor °C
+    /// (within 1.5–6).
+    pub cop_at_0c: f64,
+    pub cop_per_k: f64,
+}
+
+/// "HH:MM" → seconds after midnight.
+pub fn parse_hhmm(s: &str) -> Option<f64> {
+    let (h, m) = s.trim().split_once(':')?;
+    let (h, m) = (h.parse::<u32>().ok()?, m.parse::<u32>().ok()?);
+    (h <= 24 && m < 60 && h * 60 + m <= 1440).then(|| f64::from(h * 3600 + m * 60))
+}
+
+/// "17:30-19:30" → local seconds after midnight.
+pub fn parse_window(s: &str) -> Option<(f64, f64)> {
+    let (a, b) = s.split_once('-')?;
+    let (a, b) = (parse_hhmm(a)?, parse_hhmm(b)?);
+    (a < b).then_some((a, b))
+}
+
+impl Planner {
+    pub fn validate(&self, jurisdiction: Jurisdiction) -> Result<(), String> {
+        let bad = |s: String| Err(format!("[planner] {s}"));
+        if !matches!(self.uncertainty.as_str(), "deterministic" | "chance" | "robust") {
+            return bad(format!("uncertainty must be deterministic, chance or robust, not {:?}", self.uncertainty));
+        }
+        if !(self.epsilon > 0.0 && self.epsilon < 0.5) {
+            return bad("epsilon must be within (0, 0.5)".into());
+        }
+        for w in &self.dim_windows {
+            if parse_window(w).is_none() {
+                return bad(format!("dim window {w:?} is not like \"17:30-19:30\""));
+            }
+        }
+        let p = &self.prices;
+        if p.sources.is_empty() {
+            return bad("prices.sources is empty".into());
+        }
+        for s in &p.sources {
+            match s.as_str() {
+                "entsoe" | "energy-charts" => {}
+                "file" if p.file.is_some() => {}
+                "file" => return bad("prices source \"file\" needs prices.file".into()),
+                other => return bad(format!("unknown price source {other:?} (entsoe, energy-charts, file)")),
+            }
+        }
+        let zone = self.bidding_zone(jurisdiction);
+        if crate::market::eic(&zone).is_none() {
+            return bad(format!("unknown bidding zone {zone:?} (DE-LU, AT, CH)"));
+        }
+        if let Some(w) = &self.weather {
+            if !(-90.0..=90.0).contains(&w.latitude) || !(-180.0..=180.0).contains(&w.longitude) {
+                return bad("weather latitude/longitude out of range".into());
+            }
+            if !(0.0..=90.0).contains(&w.tilt_deg) || !(-180.0..=180.0).contains(&w.azimuth_deg) {
+                return bad("weather tilt must be 0–90° and azimuth −180–180°".into());
+            }
+            if !(w.performance_ratio > 0.3 && w.performance_ratio <= 1.0) {
+                return bad("weather performance_ratio must be within (0.3, 1]".into());
+            }
+        }
+        if let Some(d) = &self.demand_charge {
+            if d.eur_per_kw_year.is_nan() || d.eur_per_kw_year < 0.0 || d.peak_floor_kw < 0.0 {
+                return bad("demand_charge values must be ≥ 0".into());
+            }
+            if !matches!(d.billing.as_str(), "year" | "month") {
+                return bad("demand_charge.billing must be \"year\" or \"month\"".into());
+            }
+        }
+        if let Some(b) = &self.building {
+            if b.ua_kw_per_k <= 0.0 || b.cap_kwh_per_k <= 4.0 * b.ua_kw_per_k * 0.25 {
+                return bad("building needs ua_kw_per_k > 0 and a capacity well above ua × 15 min".into());
+            }
+            if !(b.comfort_night_min_c <= b.comfort_day_min_c && b.comfort_day_min_c < b.comfort_max_c) {
+                return bad("building comfort needs night min ≤ day min < max".into());
+            }
+            let (Some(a), Some(z)) = (parse_hhmm(&b.day_start), parse_hhmm(&b.day_end)) else {
+                return bad("building day_start/day_end must be \"HH:MM\"".into());
+            };
+            if a >= z {
+                return bad("building day_start must be before day_end".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// The day-ahead zone: the configured one, else the jurisdiction's.
+    pub fn bidding_zone(&self, jurisdiction: Jurisdiction) -> String {
+        self.prices.bidding_zone.clone().unwrap_or_else(|| {
+            match jurisdiction {
+                Jurisdiction::De => "DE-LU",
+                Jurisdiction::At => "AT",
+                Jurisdiction::Ch => "CH",
+            }
+            .into()
+        })
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_uncertainty() -> String {
+    "deterministic".into()
+}
+fn default_epsilon() -> f64 {
+    0.05
+}
+fn default_degradation() -> f64 {
+    0.03
+}
+fn default_refresh() -> u64 {
+    3600
+}
+fn default_performance_ratio() -> f64 {
+    0.85
+}
+fn default_billing() -> String {
+    "year".into()
+}
+
 fn default_unit() -> u8 {
     1
 }
@@ -202,6 +414,9 @@ impl Config {
             return Err("control_period_ms must be ≥ 100 and stale_after_ms at least twice that".into());
         }
         cfg.site_config()?.validate()?;
+        if let Some(p) = &cfg.planner {
+            p.validate(cfg.jurisdiction()?)?;
+        }
         Ok(cfg)
     }
 
@@ -290,9 +505,12 @@ mod tests {
         let base = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../gateway.toml")).unwrap();
         // Line endings may be CRLF on Windows checkouts.
         let text = base.replacen("[site]", &format!("[site]\n{extra_site}"), 1) + extra;
+        // One file per call: tests run in parallel.
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("gw-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join(format!("{}.toml", text.len()));
+        let p = dir.join(format!("{n}.toml"));
         std::fs::write(&p, text).unwrap();
         Config::load(&p)
     }
@@ -323,6 +541,36 @@ mod tests {
         let ch = Config::load(std::path::Path::new(&format!("{dir}/gateway-ch.toml"))).unwrap();
         assert_eq!(ch.policy().unwrap().curtailment_budget_pct, Some(3.0));
         assert!(ch.heat_pumps[0].opted_out);
+        let mpc = Config::load(std::path::Path::new(&format!("{dir}/gateway-de-planner.toml"))).unwrap();
+        let p = mpc.planner.unwrap();
+        assert_eq!(p.prices.sources, ["entsoe", "energy-charts"]);
+        assert!(p.building.is_some() && p.weather.is_some());
+    }
+
+    const PLANNER: &str = "\n[planner]\ndim_windows = [\"17:30-19:30\"]\n\
+        [planner.prices]\nsources = [\"entsoe\", \"energy-charts\"]\nimport_adder_eur_kwh = 0.12\n\
+        [planner.weather]\nlatitude = 49.23\nlongitude = 7.0\ntilt_deg = 15.0\nazimuth_deg = 0.0\n\
+        [planner.demand_charge]\neur_per_kw_year = 100.0\n";
+
+    #[test]
+    fn planner_section_is_read_and_checked() {
+        let c = load("", PLANNER).unwrap();
+        let p = c.planner.as_ref().unwrap();
+        assert!(p.enabled);
+        assert_eq!(p.bidding_zone(Jurisdiction::De), "DE-LU");
+        assert_eq!(p.demand_charge.as_ref().unwrap().billing, "year");
+        assert_eq!(parse_window(&p.dim_windows[0]), Some((17.5 * 3600.0, 19.5 * 3600.0)));
+        let ch = load("jurisdiction = \"CH\"", PLANNER).unwrap();
+        assert_eq!(ch.planner.unwrap().bidding_zone(Jurisdiction::Ch), "CH", "hourly Swiss day-ahead zone");
+        assert!(
+            load("", &PLANNER.replace("\"energy-charts\"", "\"nordpool\""))
+                .unwrap_err()
+                .contains("unknown price source")
+        );
+        assert!(
+            load("", &PLANNER.replace("[\"17:30-19:30\"]", "[\"19:30-17:30\"]")).unwrap_err().contains("dim window")
+        );
+        assert!(load("", &(PLANNER.to_owned() + "billing = \"week\"\n")).unwrap_err().contains("billing"));
     }
 
     #[test]

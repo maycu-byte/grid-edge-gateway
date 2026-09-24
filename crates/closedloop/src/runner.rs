@@ -2,16 +2,16 @@
 //! controller, with an optional MPC planner on top that re-plans every 15
 //! minutes and whenever a car arrives or leaves.
 
-use control::rules::three_phase_kw;
 use control::{
     BatterySpec, ChargerSpec, Clock, ConsumptionRule, Controller, DsoCommands, FeedInReference, Guidance, HeatPumpSpec,
     Jurisdiction, Mode, Policy, Readings, Setpoints, SiteConfig, Status,
 };
 use devices::climate::{Climate, Season, Tariff};
 use devices::sim::{Building, SimConfig, SiteSim, Weather};
-use planner::{BatteryModel, DemandCharge, EvRequest, HeatPumpModel, Plan, PlanInput, Uncertainty, Weights};
+use planner::{DemandCharge, Uncertainty};
+use planning::{BuildingModel, PlanRecord, SiteModel, build_input};
 
-use crate::adapter::{self, Details};
+use crate::adapter;
 use crate::forecast::Forecaster;
 use crate::metrics::Metrics;
 
@@ -147,15 +147,6 @@ pub fn site_config(j: Jurisdiction) -> SiteConfig {
     }
 }
 
-/// A plan and when it was made; `ev_of_charger[i]` is the plan's index of
-/// the car at charger `i`.
-#[derive(Debug, Clone)]
-pub struct PlanRecord {
-    pub made_at_s: f64,
-    pub plan: Plan,
-    pub ev_of_charger: Vec<Option<usize>>,
-}
-
 pub struct ClosedLoop {
     pub sim: SiteSim,
     pub ctl: Controller,
@@ -240,7 +231,7 @@ impl ClosedLoop {
         if self.scenario.auto_dso {
             self.cmd.dim = self.scenario.dim_at(t);
         }
-        let (readings, details) = adapter::read(&self.sim);
+        let readings = adapter::read(&self.sim);
         self.forecaster.observe(t, readings.pv_available_kw);
 
         if let Strategy::Mpc { .. } = self.strategy {
@@ -248,7 +239,7 @@ impl ClosedLoop {
             let arrivals = plugged.iter().zip(&self.plugged).any(|(now, before)| *now && !before);
             self.plugged = plugged;
             if t >= self.next_plan_s || arrivals {
-                self.replan(&readings, &details);
+                self.replan(&readings);
                 self.next_plan_s = ((t / REPLAN_S).floor() + 1.0) * REPLAN_S;
             }
         }
@@ -264,82 +255,24 @@ impl ClosedLoop {
     }
 
     fn guidance_at(&self, t: f64) -> Option<Guidance> {
-        let rec = self.plan.as_ref()?;
-        let age = t - rec.made_at_s;
-        if !(0.0..PLAN_MAX_AGE_S).contains(&age) {
-            return None;
-        }
-        let k = (age / (PLAN_STEP_H * 3600.0)).floor() as usize;
-        let p = &rec.plan;
-        if k >= p.grid_kw.len() {
-            return None;
-        }
-        Some(Guidance {
-            grid_kw: Some(p.grid_kw[k]),
-            charger_kw: rec.ev_of_charger.iter().map(|e| e.map(|i| p.ev_kw[i][k])).collect(),
-            heat_pump_kw: vec![p.heat_pump_kw.get(k).copied()],
-            dim_expected: p.dim_budget_kw[k].is_some(),
-        })
+        self.plan.as_ref()?.guidance_at(t, PLAN_MAX_AGE_S, self.sim.heat_pumps.len())
     }
 
-    fn replan(&mut self, r: &Readings, details: &Details) {
+    fn replan(&mut self, r: &Readings) {
         let Strategy::Mpc { uncertainty, dim_forecast, peak_aware } = self.strategy else { return };
         let t = self.sim.t_s;
-        let cfg = self.ctl.config().clone();
         let h = self.forecaster.horizon(t, PLAN_STEPS, PLAN_STEP_H);
-        let contract = matches!(cfg.policy.consumption, ConsumptionRule::Contract { .. });
-
-        let battery = cfg.batteries.first().zip(r.batteries.first().filter(|b| b.online)).map(|(spec, b)| {
-            let cap = spec.capacity_kwh;
-            BatteryModel {
-                energy_kwh: b.soc_pct / 100.0 * cap,
-                capacity_kwh: cap,
-                min_kwh: spec.min_soc_pct / 100.0 * cap,
-                max_kwh: spec.max_soc_pct / 100.0 * cap,
-                band_lo_kwh: 0.2 * cap,
-                band_hi_kwh: 0.8 * cap,
-                charge_kw: spec.max_charge_kw,
-                discharge_kw: spec.max_discharge_kw,
-                eta_charge: BATTERY_EFFICIENCY,
-                eta_discharge: BATTERY_EFFICIENCY,
-                degradation_eur_per_kwh: DEGRADATION_EUR_PER_KWH,
-                dimmable: true,
-            }
-        });
-
-        let mut evs = Vec::new();
-        let mut ev_of_charger = vec![None; cfg.chargers.len()];
-        for (i, c) in r.chargers.iter().enumerate() {
-            let remaining = c.remaining_kwh.unwrap_or(0.0);
-            if !(c.online && c.car_waiting && remaining > 0.05) {
-                continue;
-            }
-            let max_a = details.car_max_current_a.get(i).copied().flatten().unwrap_or(cfg.chargers[i].max_current_a);
-            ev_of_charger[i] = Some(evs.len());
-            evs.push(EvRequest {
-                remaining_kwh: remaining,
-                max_kw: three_phase_kw(max_a.min(cfg.chargers[i].max_current_a)),
-                departure_h: c.departure_s.map(|s| (s / 3600.0 - DEPARTURE_BUFFER_H).max(PLAN_STEP_H)),
-                efficiency: 1.0,
-                dimmable: !(contract && cfg.chargers[i].opted_out),
-            });
-        }
-
-        let heat_pump = cfg.heat_pumps.first().zip(r.heat_pumps.first().filter(|x| x.online)).and_then(|(spec, x)| {
-            Some(HeatPumpModel {
-                indoor_c: x.indoor_c?,
+        let model = SiteModel {
+            battery_efficiency: BATTERY_EFFICIENCY,
+            degradation_eur_per_kwh: DEGRADATION_EUR_PER_KWH,
+            building: Some(BuildingModel {
                 ua_kw_per_k: self.sim.building.ua_kw_per_k,
                 cap_kwh_per_k: self.sim.building.cap_kwh_per_k,
-                max_kw: spec.rated_kw,
-                cop: h.cop.clone(),
-                gains_kw: h.gains_kw.clone(),
-                outdoor_c: h.outdoor_c.clone(),
-                t_min_c: h.t_min_c.clone(),
-                t_max_c: h.t_max_c.clone(),
-                dimmable: !(contract && spec.opted_out),
-            })
-        });
-
+            }),
+            departure_buffer_h: DEPARTURE_BUFFER_H,
+            uncertainty,
+            ..SiteModel::default()
+        };
         // Where the planner expects a dimming: the DSO's announced windows
         // (if it knows them), and a dimming in progress for up to 2 hours.
         let dt_s = PLAN_STEP_H * 3600.0;
@@ -349,31 +282,17 @@ impl ClosedLoop {
                 (dim_forecast && self.scenario.dim_at(t_mid)) || (self.cmd.dim && t_mid < t + 2.0 * 3600.0)
             })
             .collect();
-        let cap = cfg.policy.static_feed_in_cap_pct.unwrap_or(100.0) / 100.0;
-
-        let input = PlanInput {
-            dt_h: PLAN_STEP_H,
-            forecast: h.forecast.clone(),
-            import_limit_kw: cfg.connection_kw,
-            export_limit_kw: vec![cfg.pv_installed_kw * cap; PLAN_STEPS],
-            dim,
-            dim_floor_kw: self.ctl.floor_kw() - cfg.margin_kw,
-            battery,
-            evs,
-            heat_pump,
-            uncertainty,
-            recovery_steps: 8,
-            // The plan stands for a day of the billing period (its horizon).
-            demand_charge: peak_aware.then(|| DemandCharge {
-                eur_per_kw: Tariff::default().demand_eur_per_kw(PLAN_STEPS as f64 * PLAN_STEP_H),
-                peak_so_far_kw: self.metrics.peak_quarter_kw,
-            }),
-            weights: Weights::default(),
-        };
+        // The plan stands for a day of the billing period (its horizon).
+        let demand = peak_aware.then(|| DemandCharge {
+            eur_per_kw: Tariff::default().demand_eur_per_kw(PLAN_STEPS as f64 * PLAN_STEP_H),
+            peak_so_far_kw: self.metrics.peak_quarter_kw,
+        });
+        let cfg = self.ctl.config();
+        let (input, ev_of_charger) = build_input(cfg, self.ctl.floor_kw(), &model, &h, r, dim, demand);
         match planner::plan(&input) {
             Ok(plan) => {
                 self.metrics.record_plan(plan.solve_ms);
-                self.plan = Some(PlanRecord { made_at_s: t, plan, ev_of_charger });
+                self.plan = Some(PlanRecord { made_at_s: t, start_s: t, step_s: dt_s, plan, ev_of_charger });
             }
             Err(_) => {
                 self.metrics.plan_failures += 1;

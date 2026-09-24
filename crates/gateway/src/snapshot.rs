@@ -35,6 +35,8 @@ pub struct Snapshot {
     /// Duration of the last control cycle; a cycle longer than the period is
     /// logged as an overrun.
     pub cycle_ms: f64,
+    /// The planning layer, when it is on.
+    pub planner: Option<crate::ems::PlannerView>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

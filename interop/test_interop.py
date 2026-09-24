@@ -73,7 +73,9 @@ def wait_until(pred, timeout=10, step=0.2):
 class Site:
     """site-sim + gateway, with a generated config."""
 
-    def __init__(self, tmp: Path, tls: bool, start="17:40", jurisdiction="DE", site_extra="", policy="", iec_extra=""):
+    def __init__(
+        self, tmp: Path, tls: bool, start="17:40", jurisdiction="DE", site_extra="", policy="", iec_extra="", extra=""
+    ):
         self.tmp = tmp
         self.tls = tls
         self.base = free_port_block(12)
@@ -84,6 +86,7 @@ class Site:
         self.site_extra = site_extra
         self.policy = policy
         self.iec_extra = iec_extra
+        self.extra = extra
         self.start = start
         self.procs = {}
 
@@ -147,6 +150,7 @@ deadband_kw = 0.5
 {tls}
 [api]
 bind = "127.0.0.1:{self.api}"
+{self.extra}
 """
 
     def start_sim(self):
@@ -177,6 +181,10 @@ bind = "127.0.0.1:{self.api}"
 
     def snapshot(self):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.api}/api/snapshot", timeout=2) as r:
+            return json.load(r)
+
+    def plan(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.api}/api/plan", timeout=2) as r:
             return json.load(r)
 
     def sim_device(self, name, action):
@@ -423,6 +431,52 @@ def test_state_file_keeps_the_totals(site, dso):
 
 
 # --- TLS -------------------------------------------------------------------
+
+def test_planner_defers_charging_to_cheap_hours_and_the_floor_still_holds(tmp_path):
+    # Day-ahead prices from a file: 500 €/MWh for the next three hours, 50 after.
+    now = int(time.time()) // 900 * 900
+    prices = tmp_path / "prices.csv"
+    prices.write_text(
+        "start,eur_mwh\n" + "".join(f"{now - 3600 + k * 900},{500.0 if k < 16 else 50.0}\n" for k in range(160))
+    )
+    planner = (
+        "[planner]\n[planner.prices]\nsources = [\"file\"]\n"
+        f'file = "{prices.as_posix()}"\nimport_adder_eur_kwh = 0.12\n'
+    )
+    s = Site(tmp_path, tls=False, extra=planner)
+    try:
+        s.start_sim()
+        s.start_gateway()
+        assert wait_until(lambda: s.snapshot()["planner"]["status"] == "following the plan", 20), s.snapshot()[
+            "planner"
+        ]
+        plan = s.plan()
+        assert len(plan["grid_kw"]) == 96
+        assert plan["price_eur_mwh"][0] == 500.0
+        # 17:40: three vans stay overnight and one leaves at 20:30. The plan
+        # charges the overnight vans after the expensive hours; the rules
+        # alone would charge all four at once.
+        assert wait_until(
+            lambda: sum(1 for c in s.snapshot()["chargers"] if c["status"] == "waiting" and c["setpoint_a"] == 0) >= 2,
+            10,
+        ), s.snapshot()["chargers"]
+        assert (tmp_path / "planner-state.json").exists()
+
+        d = Dso(s.iec)
+        try:
+            assert d.connected()
+            d.dim.value = True
+            assert d.dim.transmit(cause=c104.Cot.ACTIVATION)
+            assert wait_until(lambda: d.value(DIMMED) is True, 5)
+            assert wait_until(lambda: d.value(STEUVE_GRID) <= PMIN_DEPOT, 8), d.value(STEUVE_GRID)
+            # the planner re-plans for the dimming and the site keeps following a plan
+            assert wait_until(lambda: s.plan()["dim"][0] is True, 15)
+            assert d.value(STEUVE_GRID) <= PMIN_DEPOT
+        finally:
+            d.close()
+    finally:
+        s.close()
+
 
 @pytest.fixture
 def tls_site(tmp_path):

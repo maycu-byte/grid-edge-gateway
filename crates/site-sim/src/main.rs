@@ -18,7 +18,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use devices::sim::{DeviceId, Exception, SiteSim};
+use devices::climate::Season;
+use devices::sim::{DeviceId, Exception, SimConfig, SiteSim, Weather};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_modbus::server::tcp::{Server, accept_tcp_connection};
@@ -32,10 +33,12 @@ struct Args {
     start_s: f64,
     speed: f64,
     seed: u64,
+    season: Season,
 }
 
 fn parse_args() -> Args {
-    let mut a = Args { base_port: 5020, http_port: 8090, start_s: 6.0 * 3600.0, speed: 1.0, seed: 7 };
+    let mut a =
+        Args { base_port: 5020, http_port: 8090, start_s: 6.0 * 3600.0, speed: 1.0, seed: 7, season: Season::Spring };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     for pair in argv.chunks(2) {
         let [k, v] = pair else { usage() };
@@ -44,6 +47,14 @@ fn parse_args() -> Args {
             "--http-port" => a.http_port = v.parse().unwrap_or_else(|_| usage()),
             "--speed" => a.speed = v.parse().unwrap_or_else(|_| usage()),
             "--seed" => a.seed = v.parse().unwrap_or_else(|_| usage()),
+            "--season" => a.season = Season::parse(v).unwrap_or_else(|| usage()),
+            // The local time of day now (Central European time), so the
+            // simulated sun matches a real price and weather feed.
+            "--start" if v == "now" => {
+                let unix_s =
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+                a.start_s = planning::local_seconds_of_day(unix_s);
+            }
             "--start" => {
                 let (h, m) = v.split_once(':').unwrap_or_else(|| usage());
                 a.start_s = h.parse::<f64>().unwrap_or_else(|_| usage()) * 3600.0
@@ -56,7 +67,9 @@ fn parse_args() -> Args {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: site-sim [--start HH:MM] [--speed N] [--seed N] [--base-port 5020] [--http-port 8090]");
+    eprintln!(
+        "usage: site-sim [--start HH:MM|now] [--season spring|winter] [--speed N] [--seed N] [--base-port 5020] [--http-port 8090]"
+    );
     std::process::exit(2)
 }
 
@@ -208,7 +221,8 @@ async fn serve_http(sim: Shared, port: u16) -> std::io::Result<()> {
 #[tokio::main]
 async fn main() {
     let args = parse_args();
-    let sim: Shared = Arc::new(Mutex::new(SiteSim::depot(args.start_s, args.seed)));
+    let cfg = SimConfig::new(args.start_s, args.seed, args.season, Weather::Fair);
+    let sim: Shared = Arc::new(Mutex::new(SiteSim::new(cfg)));
 
     let devs = devices(&sim.lock().unwrap());
     for (k, dev) in devs.into_iter().enumerate() {

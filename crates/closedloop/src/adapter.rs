@@ -7,14 +7,6 @@ use devices::maps::{battery, evse, heat_pump, regs_to_u32};
 use devices::sim::{DeviceId, SiteSim};
 use devices::sunspec::{self, available, controls, inverter, meter};
 
-/// Extra facts some devices report that the planner needs but the
-/// real-time controller does not.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Details {
-    /// Most current each plugged-in car accepts, A (ISO 15118 `EVMaxCurrent`).
-    pub car_max_current_a: Vec<Option<f64>>,
-}
-
 /// Body address of a SunSpec model in a device's chain, found the way a
 /// Modbus client finds it: by walking the chain from register 40000.
 fn model_body(sim: &SiteSim, dev: DeviceId, id: u16) -> Option<u16> {
@@ -32,7 +24,7 @@ pub fn arm_watchdogs(sim: &mut SiteSim) {
     }
 }
 
-pub fn read(sim: &SiteSim) -> (Readings, Details) {
+pub fn read(sim: &SiteSim) -> Readings {
     let mut pv = Some(0.0);
     let mut avail = Some(0.0);
     for i in 0..sim.inverters.len() {
@@ -50,7 +42,6 @@ pub fn read(sim: &SiteSim) -> (Readings, Details) {
         .and_then(|b| sim.read(DeviceId::Meter, b, meter::LEN as u16).ok())
         .map(|m| sunspec::scaled(m[meter::W] as i16, m[meter::W_SF] as i16) / 1000.0);
 
-    let mut details = Details::default();
     let chargers = (0..sim.chargers.len())
         .map(|i| match sim.read(DeviceId::Charger(i), 0, evse::LEN) {
             Ok(r) => {
@@ -58,7 +49,6 @@ pub fn read(sim: &SiteSim) -> (Readings, Details) {
                 let request = regs_to_u32(&r[evse::ENERGY_REQUEST as usize..]) as f64 / 1000.0;
                 let dep = r[evse::DEPARTURE_MIN as usize];
                 let car_max = r[evse::CAR_MAX_CURRENT as usize];
-                details.car_max_current_a.push((car_max > 0).then(|| car_max as f64 / 10.0));
                 control::ChargerReading {
                     online: true,
                     car_waiting: matches!(
@@ -73,10 +63,7 @@ pub fn read(sim: &SiteSim) -> (Readings, Details) {
                     car_max_current_a: (car_max > 0).then(|| car_max as f64 / 10.0),
                 }
             }
-            Err(_) => {
-                details.car_max_current_a.push(None);
-                control::ChargerReading::default()
-            }
+            Err(_) => control::ChargerReading::default(),
         })
         .collect();
     let heat_pumps = (0..sim.heat_pumps.len())
@@ -102,7 +89,7 @@ pub fn read(sim: &SiteSim) -> (Readings, Details) {
         })
         .collect();
 
-    (Readings { grid_kw: grid, pv_kw: pv, pv_available_kw: avail, chargers, heat_pumps, batteries }, details)
+    Readings { grid_kw: grid, pv_kw: pv, pv_available_kw: avail, chargers, heat_pumps, batteries }
 }
 
 pub fn write(sim: &mut SiteSim, sp: &Setpoints) {

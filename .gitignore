@@ -4,3 +4,4 @@ __pycache__/
 certs/demo/
 web/pkg/
 dso-state.json
+planner-state.json
