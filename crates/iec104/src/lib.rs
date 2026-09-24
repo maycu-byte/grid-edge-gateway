@@ -5,6 +5,7 @@
 
 pub mod apci;
 pub mod asdu;
+pub mod describe;
 pub mod session;
 pub mod time;
 

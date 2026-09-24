@@ -27,9 +27,10 @@ pub mod evse {
     pub const LEN: u16 = 11;
 
     pub const STATUS_AVAILABLE: u16 = 0;
-    pub const STATUS_CONNECTED: u16 = 1; // car plugged in, not charging (full or limited to 0)
+    pub const STATUS_CONNECTED: u16 = 1; // car plugged in, waiting (limit below 6 A)
     pub const STATUS_CHARGING: u16 = 2;
     pub const STATUS_FAILSAFE: u16 = 3; // charging at failsafe current, controller lost
+    pub const STATUS_FINISHED: u16 = 4; // car plugged in, battery full
 }
 
 pub mod heat_pump {

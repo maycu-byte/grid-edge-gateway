@@ -1,8 +1,10 @@
 [package]
 name = "site-sim"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
+devices = { version = "0.1.0", path = "../devices" }
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-modbus = { version = "0.17.0", default-features = false, features = ["tcp-server", "tcp"] }

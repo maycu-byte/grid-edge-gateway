@@ -409,6 +409,7 @@ impl SiteSim {
         let mut r = vec![0u16; evse::LEN as usize];
         r[evse::STATUS as usize] = match &c.car {
             None => evse::STATUS_AVAILABLE,
+            Some(car) if car.charged_kwh >= car.needs_kwh => evse::STATUS_FINISHED,
             Some(_) if c.current_a > 0.0 && c.in_failsafe(self.t_s) => evse::STATUS_FAILSAFE,
             Some(_) if c.current_a > 0.0 => evse::STATUS_CHARGING,
             Some(_) => evse::STATUS_CONNECTED,

@@ -1,0 +1,64 @@
+# Demo site: a logistics depot with 120 kWp rooftop PV, four 22 kW chargers
+# and a 14 kW heat pump. Addresses match `site-sim` defaults.
+
+[site]
+pv_installed_kw = 120.0
+# "grid_connection_point": the DSO feed-in limit applies to export at the
+# grid connection; "plant_output": to the inverters' output itself.
+feed_in_reference = "grid_connection_point"
+release_ramp_s = 300.0      # hand power back gradually after a §14a dimming
+margin_kw = 0.3             # headroom below every limit
+min_dwell_s = 300.0         # min time before a car is rotated in or out
+control_period_ms = 1000
+stale_after_ms = 3000       # a device silent for this long counts as offline
+
+[[inverter]]
+address = "127.0.0.1:5020"
+[[inverter]]
+address = "127.0.0.1:5021"
+
+[meter]
+address = "127.0.0.1:5022"
+
+# Chargers fall back to 6 A (4.14 kW) on their own if the gateway goes
+# silent for 30 s, which keeps even a crashed gateway within §14a.
+[[charger]]
+address = "127.0.0.1:5023"
+max_current_a = 32.0
+failsafe_current_a = 6.0
+failsafe_timeout_s = 30
+[[charger]]
+address = "127.0.0.1:5024"
+max_current_a = 32.0
+failsafe_current_a = 6.0
+failsafe_timeout_s = 30
+[[charger]]
+address = "127.0.0.1:5025"
+max_current_a = 32.0
+failsafe_current_a = 6.0
+failsafe_timeout_s = 30
+[[charger]]
+address = "127.0.0.1:5026"
+max_current_a = 32.0
+failsafe_current_a = 6.0
+failsafe_timeout_s = 30
+
+[[heat_pump]]
+address = "127.0.0.1:5027"
+rated_kw = 14.0
+min_kw = 3.0
+
+[iec104]
+bind = "0.0.0.0:2404"
+common_address = 1
+deadband_kw = 1.0
+# Uncomment for TLS with mutual authentication (IEC 62351-3 style).
+# See certs/README.md to generate demo certificates.
+# [iec104.tls]
+# cert = "certs/demo/station.pem"
+# key = "certs/demo/station.key.pem"
+# client_ca = "certs/demo/ca.pem"
+
+[api]
+bind = "127.0.0.1:8080"
+web_root = "web"

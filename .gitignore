@@ -4,3 +4,4 @@ __pycache__/
 *.pem
 !certs/demo/*.pem
 web/pkg/
+dso-state.json
