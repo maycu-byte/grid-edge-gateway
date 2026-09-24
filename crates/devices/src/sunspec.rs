@@ -70,6 +70,16 @@ pub mod meter {
     pub const W_SF: usize = 20;
 }
 
+/// Vendor model (SunSpec reserves IDs 64000–65535 for vendors): the power
+/// the inverter could produce right now without any limit. Real inverters
+/// expose this in vendor registers; it is what curtailment is measured from.
+pub mod available {
+    pub const ID: u16 = 64_900;
+    pub const LEN: usize = 2;
+    pub const W_AVAIL: usize = 0;
+    pub const W_AVAIL_SF: usize = 1;
+}
+
 /// Applies a SunSpec scale factor: `value · 10^sf`.
 pub fn scaled(value: i16, sf: i16) -> f64 {
     value as f64 * 10f64.powi(sf as i32)

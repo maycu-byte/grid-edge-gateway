@@ -9,15 +9,15 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use devices::maps::{evse, heat_pump, regs_to_u32};
-use devices::sunspec::{self, ModelLocation, controls, inverter, meter, nameplate};
+use devices::maps::{battery, evse, heat_pump, regs_to_u32};
+use devices::sunspec::{self, ModelLocation, available, controls, inverter, meter, nameplate};
 use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_modbus::Slave;
 use tokio_modbus::client::{Context, Reader, Writer};
 use tracing::{info, warn};
 
-use crate::config::{Charger, Config, Device, HeatPump};
+use crate::config::{Battery, Charger, Config, Device, HeatPump};
 
 const IO_TIMEOUT: Duration = Duration::from_millis(800);
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
@@ -29,6 +29,8 @@ const INVERTER_REFRESH: Duration = Duration::from_secs(30);
 pub struct InverterReading {
     pub kw: f64,
     pub rated_kw: f64,
+    /// From the vendor model 64900, when the inverter has it.
+    pub available_kw: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -43,6 +45,13 @@ pub struct ChargerReading {
 pub struct HeatPumpReading {
     pub kw: f64,
     pub demand_kw: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BatteryReading {
+    pub status: u16,
+    pub kw: f64,
+    pub soc_pct: f64,
 }
 
 /// Latest reading of one device and when it was taken.
@@ -78,6 +87,7 @@ pub struct FieldState {
     pub meter_kw: Slot<f64>,
     pub chargers: Vec<Slot<ChargerReading>>,
     pub heat_pumps: Vec<Slot<HeatPumpReading>>,
+    pub batteries: Vec<Slot<BatteryReading>>,
 }
 
 pub type Shared = Arc<Mutex<FieldState>>;
@@ -194,6 +204,17 @@ pub fn spawn_all(cfg: &Config, state: Shared, setpoints: watch::Receiver<control
             charger_session(ctx, i, c.clone(), state.clone(), sp.clone(), period)
         }));
     }
+    for (i, b) in cfg.batteries.iter().enumerate() {
+        let (state, sp, b) = (state.clone(), setpoints.clone(), b.clone());
+        let dev = Device { address: b.address, unit: b.unit };
+        let lost = {
+            let s = state.clone();
+            move || s.lock().unwrap().batteries[i] = Slot::default()
+        };
+        tokio::spawn(supervise(format!("battery{i}"), dev, lost, move |ctx| {
+            battery_session(ctx, i, b.clone(), state.clone(), sp.clone(), period)
+        }));
+    }
     for (i, h) in cfg.heat_pumps.iter().enumerate() {
         let (state, sp, h) = (state.clone(), setpoints.clone(), h.clone());
         let dev = Device { address: h.address, unit: h.unit };
@@ -218,6 +239,7 @@ async fn inverter_session(
     let inv = find(&models, inverter::ID)?;
     let ctl = find(&models, controls::ID)?;
     let np = find(&models, nameplate::ID)?;
+    let avail = models.iter().find(|m| m.id == available::ID).copied();
     let n = read(&mut ctx, np.body, nameplate::LEN as u16).await?;
     let rated_kw = sunspec::scaled(n[nameplate::W_RTG] as i16, n[nameplate::W_RTG_SF] as i16) / 1000.0;
     let k = read(&mut ctx, ctl.body, controls::LEN as u16).await?;
@@ -234,6 +256,13 @@ async fn inverter_session(
         tick.tick().await;
         let m = read(&mut ctx, inv.body, inverter::LEN as u16).await?;
         let kw = sunspec::scaled(m[inverter::W] as i16, m[inverter::W_SF] as i16) / 1000.0;
+        let available_kw = match avail {
+            Some(a) => {
+                let r = read(&mut ctx, a.body, available::LEN as u16).await?;
+                Some(sunspec::scaled(r[available::W_AVAIL] as i16, r[available::W_AVAIL_SF] as i16) / 1000.0)
+            }
+            None => None,
+        };
 
         let target = setpoints.borrow().pv_limit_pct;
         let due = match written {
@@ -246,7 +275,7 @@ async fn inverter_session(
             write(&mut ctx, ctl.body + controls::W_MAX_LIM_ENA as u16, 1).await?;
             written = Some((target, Instant::now()));
         }
-        state.lock().unwrap().inverters[i].set(InverterReading { kw, rated_kw });
+        state.lock().unwrap().inverters[i].set(InverterReading { kw, rated_kw, available_kw });
     }
 }
 
@@ -309,5 +338,31 @@ async fn heat_pump_session(
         });
         let kw = setpoints.borrow().heat_pump_limit_kw.get(i).copied().unwrap_or(0.0);
         write(&mut ctx, heat_pump::POWER_LIMIT, (kw * 10.0).floor() as u16).await?;
+    }
+}
+
+async fn battery_session(
+    mut ctx: Context,
+    i: usize,
+    cfg: Battery,
+    state: Shared,
+    setpoints: watch::Receiver<control::Setpoints>,
+    period: Duration,
+) -> IoResult<()> {
+    // Arm the BMS watchdog: if the gateway goes quiet, the battery idles.
+    write(&mut ctx, battery::WATCHDOG_S, cfg.watchdog_s).await?;
+    let mut tick = tokio::time::interval(period);
+    loop {
+        tick.tick().await;
+        let r = read(&mut ctx, 0, battery::LEN).await?;
+        state.lock().unwrap().batteries[i].set(BatteryReading {
+            status: r[battery::STATUS as usize],
+            kw: r[battery::POWER as usize] as i16 as f64 / 10.0,
+            soc_pct: r[battery::SOC as usize] as f64 / 10.0,
+        });
+        // Written every cycle: it is also the heartbeat.
+        let kw = setpoints.borrow().battery_kw.get(i).copied().unwrap_or(0.0);
+        let raw = (kw * 10.0).round().clamp(i16::MIN as f64, i16::MAX as f64) as i16;
+        write(&mut ctx, battery::SETPOINT, raw as u16).await?;
     }
 }

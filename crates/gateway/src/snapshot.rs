@@ -6,28 +6,42 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Snapshot {
     pub time_ms: i64,
+    /// "DE", "AT" or "CH".
+    pub jurisdiction: &'static str,
     pub dso: DsoView,
     pub mode: &'static str,
     pub grid_kw: Option<f64>,
     pub pv_kw: Option<f64>,
+    pub pv_available_kw: Option<f64>,
     pub base_load_kw: Option<f64>,
     pub pv_surplus_kw: Option<f64>,
     pub steuve_kw: f64,
     pub steuve_grid_kw: Option<f64>,
     pub steuve_budget_kw: Option<f64>,
-    pub pmin_kw: f64,
+    /// Pmin,14a in DE, the contracted minimum elsewhere.
+    pub floor_kw: f64,
+    /// Feed-in limit after country rules (static caps, budgets), %.
+    pub feed_in_limit_in_force_pct: f64,
     pub allowed_export_kw: f64,
     pub pv_limit_pct: f64,
     pub inverters: Vec<InverterView>,
     pub chargers: Vec<ChargerView>,
     pub heat_pumps: Vec<HeatPumpView>,
+    pub batteries: Vec<BatteryView>,
+    pub totals: TotalsView,
+    /// DSO commands not (fully) applied, and why.
+    pub refusals: Vec<&'static str>,
     pub fallbacks: Vec<String>,
+    /// Duration of the last control cycle; a cycle longer than the period is
+    /// logged as an overrun.
+    pub cycle_ms: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DsoView {
-    pub dim_14a: bool,
+    pub dim: bool,
     pub feed_in_limit_pct: f64,
+    pub emergency: bool,
     pub connections: usize,
 }
 
@@ -54,6 +68,23 @@ pub struct HeatPumpView {
     pub kw: Option<f64>,
     pub demand_kw: Option<f64>,
     pub limit_kw: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BatteryView {
+    pub online: bool,
+    pub status: &'static str,
+    pub kw: Option<f64>,
+    pub soc_pct: Option<f64>,
+    pub setpoint_kw: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TotalsView {
+    pub dimmed_min_today: f64,
+    pub produced_kwh_year: f64,
+    pub curtailed_kwh_year: f64,
+    pub curtailment_budget_used_pct: Option<f64>,
 }
 
 /// A telecontrol frame for the dashboard's protocol log.

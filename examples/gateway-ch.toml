@@ -1,13 +1,15 @@
 # Demo site: a logistics depot with 120 kWp rooftop PV, four 22 kW chargers,
 # a 14 kW heat pump and a 100 kWh battery. Addresses match `site-sim` defaults.
-# For Austrian and Swiss rules see examples/gateway-at.toml and -ch.toml.
+# Swiss rules (StromVG Art. 17c, StromVV Art. 19c): the DSO may curtail at most
+# 3% of the yearly PV energy for free; beyond that only in an emergency.
+# Consumption is dimmed only under a contract the owner signed.
 
 [site]
 # Rules the DSO commands are applied under: "DE" (default), "AT" or "CH".
-# jurisdiction = "DE"
+jurisdiction = "CH"
 pv_installed_kw = 120.0
 connection_kw = 250.0       # grid connection rating; readings far beyond it are implausible
-# expected_annual_yield_kwh = 120000.0   # for curtailment budgets (CH); default 1,000 kWh/kWp
+expected_annual_yield_kwh = 114000.0    # 950 kWh/kWp, Swiss Plateau
 # "grid_connection_point": the DSO feed-in limit applies to export at the
 # grid connection; "plant_output": to the inverters' output itself.
 feed_in_reference = "grid_connection_point"
@@ -18,6 +20,12 @@ margin_kw = 0.3             # headroom below every limit
 min_dwell_s = 300.0         # min time before a car is rotated in or out
 control_period_ms = 1000
 stale_after_ms = 3000       # a device silent for this long counts as offline
+
+[policy]
+curtailment_budget_pct = 3.0        # StromVV Art. 19c Abs. 4
+enforce_curtailment_budget = true   # refuse non-emergency curtailment beyond it
+contract_min_kw = 8.0
+contract_max_minutes_per_day = 180
 
 [[inverter]]
 address = "127.0.0.1:5020"
@@ -54,6 +62,7 @@ failsafe_timeout_s = 30
 address = "127.0.0.1:5027"
 rated_kw = 14.0
 min_kw = 3.0
+opted_out = true   # the owner forbade the DSO to use the heat pump
 
 # The battery counts as a controllable device under §14a and goes idle on
 # its own if the gateway is silent for 30 s.

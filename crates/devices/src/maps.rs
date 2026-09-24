@@ -50,6 +50,32 @@ pub mod heat_pump {
     pub const STATUS_LIMITED: u16 = 2;
 }
 
+/// A site battery (EMS-facing map of a battery inverter). Power is signed:
+/// + charging, − discharging, in 0.1 kW as int16. Like the chargers, the
+/// battery has a watchdog: without a setpoint for `WATCHDOG_S` seconds its
+/// BMS goes idle (0 kW), the safe state for the grid.
+pub mod battery {
+    pub const STATUS: u16 = 0;
+    /// Power setpoint, 0.1 kW (int16, + charge). Writable; also the heartbeat.
+    pub const SETPOINT: u16 = 1;
+    /// Measured power, 0.1 kW (int16, + charge).
+    pub const POWER: u16 = 2;
+    /// State of charge, 0.1 %.
+    pub const SOC: u16 = 3;
+    /// Usable capacity, 0.1 kWh.
+    pub const CAPACITY: u16 = 4;
+    pub const MAX_CHARGE: u16 = 5;
+    pub const MAX_DISCHARGE: u16 = 6;
+    /// Watchdog timeout, s. Writable. 0 disables it.
+    pub const WATCHDOG_S: u16 = 7;
+    pub const LEN: u16 = 8;
+
+    pub const STATUS_IDLE: u16 = 0;
+    pub const STATUS_CHARGING: u16 = 1;
+    pub const STATUS_DISCHARGING: u16 = 2;
+    pub const STATUS_WATCHDOG: u16 = 3; // idle because the controller went quiet
+}
+
 pub fn u32_to_regs(v: u32) -> [u16; 2] {
     [(v >> 16) as u16, v as u16]
 }

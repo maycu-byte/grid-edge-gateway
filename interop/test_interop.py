@@ -23,8 +23,11 @@ TARGET = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "debug"
 CERTS = ROOT / "certs" / "demo"
 
 GRID, PV, STEUVE, STEUVE_GRID, PMIN, FEED_IN_FB, PV_LIMIT = 1001, 1002, 1003, 1004, 1005, 1006, 1007
+FEED_IN_IN_FORCE, BATTERY_KW, BATTERY_SOC, DIM_MINUTES, CURTAILED_KWH, BUDGET_USED = 1008, 1009, 1010, 1011, 1012, 1013
 DIMMED, RELEASING, METER_FALLBACK, DEVICE_FAULT = 2001, 2002, 2003, 2004
-CMD_DIM, CMD_FEED_IN = 5001, 5002
+EMERGENCY_ACTIVE, DAY_LIMIT, BUDGET_EXHAUSTED = 2005, 2006, 2007
+CMD_DIM, CMD_FEED_IN, CMD_EMERGENCY = 5001, 5002, 5003
+PMIN_DEPOT = 18.2  # 4 chargers + battery + 14 kW heat pump: 0.4 * 14 + 5 * 0.6 * 4.2
 
 
 def free_port_block(n):
@@ -70,13 +73,17 @@ def wait_until(pred, timeout=10, step=0.2):
 class Site:
     """site-sim + gateway, with a generated config."""
 
-    def __init__(self, tmp: Path, tls: bool, start="17:40"):
+    def __init__(self, tmp: Path, tls: bool, start="17:40", jurisdiction="DE", site_extra="", policy="", iec_extra=""):
         self.tmp = tmp
         self.tls = tls
-        self.base = free_port_block(11)
-        self.http = self.base + 8
-        self.iec = self.base + 9
-        self.api = self.base + 10
+        self.base = free_port_block(12)
+        self.http = self.base + 9
+        self.iec = self.base + 10
+        self.api = self.base + 11
+        self.jurisdiction = jurisdiction
+        self.site_extra = site_extra
+        self.policy = policy
+        self.iec_extra = iec_extra
         self.start = start
         self.procs = {}
 
@@ -97,13 +104,19 @@ class Site:
             )
         return f"""
 [site]
+jurisdiction = "{self.jurisdiction}"
 pv_installed_kw = 120.0
+connection_kw = 250.0
+pv_ramp_pct_per_s = 20.0
+{self.site_extra}
 feed_in_reference = "grid_connection_point"
 release_ramp_s = 20.0
 margin_kw = 0.3
 min_dwell_s = 300.0
 control_period_ms = 500
 stale_after_ms = 1500
+
+{self.policy}
 
 [[inverter]]
 address = "127.0.0.1:{b}"
@@ -117,10 +130,20 @@ address = "127.0.0.1:{b + 7}"
 rated_kw = 14.0
 min_kw = 3.0
 
+[[battery]]
+address = "127.0.0.1:{b + 8}"
+capacity_kwh = 100.0
+max_charge_kw = 50.0
+max_discharge_kw = 50.0
+min_soc_pct = 10.0
+max_soc_pct = 95.0
+watchdog_s = 30
+
 [iec104]
 bind = "127.0.0.1:{self.iec}"
 common_address = 1
 deadband_kw = 0.5
+{self.iec_extra}
 {tls}
 [api]
 bind = "127.0.0.1:{self.api}"
@@ -180,6 +203,7 @@ class Dso:
         self.client.on_new_point(callable=on_new_point)
         self.dim = self.station.add_point(io_address=CMD_DIM, type=c104.Type.C_SC_NA_1)
         self.feed_in = self.station.add_point(io_address=CMD_FEED_IN, type=c104.Type.C_SE_NC_1)
+        self.emergency = self.station.add_point(io_address=CMD_EMERGENCY, type=c104.Type.C_SC_NA_1)
         self.client.start()
 
     def connected(self, timeout=5):
@@ -222,7 +246,12 @@ def test_general_interrogation_returns_the_point_list(dso):
         assert p.quality.is_good(), ioa
     for ioa in (DIMMED, RELEASING, METER_FALLBACK, DEVICE_FAULT):
         assert dso.point(ioa).type == c104.Type.M_SP_TB_1
-    assert dso.value(PMIN) == pytest.approx(16.52, abs=0.01)
+    assert dso.value(PMIN) == pytest.approx(PMIN_DEPOT, abs=0.01)
+    for ioa in (FEED_IN_IN_FORCE, BATTERY_KW, BATTERY_SOC, DIM_MINUTES, CURTAILED_KWH):
+        assert dso.point(ioa).quality.is_good(), ioa
+    assert dso.point(BUDGET_USED).quality.is_good() is False, "no curtailment budget in DE"
+    for ioa in (EMERGENCY_ACTIVE, DAY_LIMIT, BUDGET_EXHAUSTED):
+        assert dso.value(ioa) is False
     assert dso.value(DIMMED) is False
 
 
@@ -233,7 +262,7 @@ def test_dimming_keeps_grid_draw_of_controllable_devices_under_pmin(site, dso):
     assert dso.dim.transmit(cause=c104.Cot.ACTIVATION)
     assert wait_until(lambda: dso.value(DIMMED) is True, 5)
     # Chargers and heat pump follow within a few control cycles.
-    assert wait_until(lambda: dso.value(STEUVE_GRID) <= 16.52, 8), dso.value(STEUVE_GRID)
+    assert wait_until(lambda: dso.value(STEUVE_GRID) <= PMIN_DEPOT, 8), dso.value(STEUVE_GRID)
     snap = site.snapshot()
     assert snap["mode"] == "dimmed"
     active = [c for c in snap["chargers"] if c["setpoint_a"] > 0]
@@ -270,7 +299,7 @@ def test_meter_loss_is_reported_and_dimming_falls_back_to_pmin(site, dso):
     assert wait_until(lambda: dso.value(METER_FALLBACK) is True, 6)
     assert dso.point(GRID).quality.is_good() is False
     snap = site.snapshot()
-    assert snap["steuve_budget_kw"] == pytest.approx(16.52 - 0.3, abs=0.01)
+    assert snap["steuve_budget_kw"] == pytest.approx(PMIN_DEPOT - 0.3, abs=0.01)
     site.sim_device("meter", "online")
     assert wait_until(lambda: dso.value(METER_FALLBACK) is False, 6)
 
@@ -278,13 +307,117 @@ def test_meter_loss_is_reported_and_dimming_falls_back_to_pmin(site, dso):
 def test_dso_commands_survive_a_gateway_restart(site, dso):
     dso.dim.value = True
     assert dso.dim.transmit(cause=c104.Cot.ACTIVATION)
-    assert wait_until(lambda: site.snapshot()["dso"]["dim_14a"], 5)
+    assert wait_until(lambda: site.snapshot()["dso"]["dim"], 5)
     dso.close()
     site.stop_gateway()
     site.start_gateway()
     snap = site.snapshot()
-    assert snap["dso"]["dim_14a"] is True
+    assert snap["dso"]["dim"] is True
     assert snap["mode"] == "dimmed"
+
+
+# --- robustness and country rules -------------------------------------------------
+
+
+def test_emergency_command_is_confirmed_and_reported(dso):
+    dso.emergency.value = True
+    assert dso.emergency.transmit(cause=c104.Cot.ACTIVATION)
+    assert wait_until(lambda: dso.value(EMERGENCY_ACTIVE) is True, 5)
+    dso.emergency.value = False
+    assert dso.emergency.transmit(cause=c104.Cot.ACTIVATION)
+    assert wait_until(lambda: dso.value(EMERGENCY_ACTIVE) is False, 5)
+
+
+def test_battery_discharges_to_support_dimmed_loads(site, dso):
+    dso.dim.value = True
+    assert dso.dim.transmit(cause=c104.Cot.ACTIVATION)
+    # 17:40, no sun: the battery covers part of the evening import.
+    assert wait_until(lambda: (dso.value(BATTERY_KW) or 0) < -10, 10), dso.value(BATTERY_KW)
+    snap = site.snapshot()
+    loads = sum(c["kw"] or 0 for c in snap["chargers"]) + sum(h["kw"] or 0 for h in snap["heat_pumps"])
+    assert loads > PMIN_DEPOT, "loads get more than Pmin thanks to the battery"
+
+
+def test_battery_offline_is_a_fallback_and_it_idles_on_its_own(site, dso):
+    site.sim_device("battery0", "offline")
+    assert wait_until(lambda: dso.value(DEVICE_FAULT) is True, 6)
+    assert "battery0 offline" in site.snapshot()["fallbacks"]
+    site.sim_device("battery0", "online")
+    assert wait_until(lambda: dso.value(DEVICE_FAULT) is False, 8)
+
+
+def test_austria_applies_the_static_70_percent_cap(tmp_path):
+    s = Site(tmp_path, tls=False, start="12:30", jurisdiction="AT", policy="[policy]\nstatic_feed_in_cap_pct = 70.0\n")
+    try:
+        s.start_sim()
+        s.start_gateway()
+        d = Dso(s.iec)
+        try:
+            assert d.connected()
+            assert wait_until(lambda: d.value(FEED_IN_IN_FORCE) == pytest.approx(70.0), 5)
+            assert d.value(FEED_IN_FB) == pytest.approx(100.0), "no DSO command was sent"
+        finally:
+            d.close()
+    finally:
+        s.close()
+
+
+def test_switzerland_refuses_curtailment_beyond_the_3_percent_budget(tmp_path):
+    # A tiny yield and budget (0.5% of 1 kWh) run out in seconds; at noon the
+    # battery and the depot absorb most of the PV, so little is curtailed.
+    s = Site(
+        tmp_path,
+        tls=False,
+        start="12:30",
+        jurisdiction="CH",
+        site_extra="expected_annual_yield_kwh = 1.0",
+        policy="[policy]\ncurtailment_budget_pct = 0.5\n",
+    )
+    try:
+        s.start_sim()
+        s.start_gateway()
+        d = Dso(s.iec)
+        try:
+            assert d.connected()
+            assert wait_until(lambda: d.point(BUDGET_USED) is not None, 5)
+            d.feed_in.value = 0.0
+            assert d.feed_in.transmit(cause=c104.Cot.ACTIVATION)
+            assert wait_until(lambda: d.value(BUDGET_EXHAUSTED) is True, 20), s.snapshot()["totals"]
+            assert wait_until(lambda: d.value(FEED_IN_IN_FORCE) == pytest.approx(100.0), 5)
+            # An emergency still curtails.
+            d.emergency.value = True
+            assert d.emergency.transmit(cause=c104.Cot.ACTIVATION)
+            assert wait_until(lambda: d.value(FEED_IN_IN_FORCE) == pytest.approx(0.0), 5)
+        finally:
+            d.close()
+    finally:
+        s.close()
+
+
+def test_link_loss_policy_release_lifts_commands(tmp_path):
+    s = Site(tmp_path, tls=False, iec_extra='on_link_loss = "release"\nlink_loss_release_s = 2')
+    try:
+        s.start_sim()
+        s.start_gateway()
+        d = Dso(s.iec)
+        assert d.connected()
+        d.dim.value = True
+        assert d.dim.transmit(cause=c104.Cot.ACTIVATION)
+        assert wait_until(lambda: s.snapshot()["dso"]["dim"], 5)
+        d.close()
+        assert wait_until(lambda: s.snapshot()["dso"]["dim"] is False, 10)
+    finally:
+        s.close()
+
+
+def test_state_file_keeps_the_totals(site, dso):
+    dso.dim.value = True
+    assert dso.dim.transmit(cause=c104.Cot.ACTIVATION)
+    time.sleep(2)
+    dso.dim.value = False
+    assert dso.dim.transmit(cause=c104.Cot.ACTIVATION)
+    state = json.loads((site.tmp / "dso-state.json").read_text())
+    assert state["totals"]["dimmed_s_today"] > 0
 
 
 # --- TLS -------------------------------------------------------------------

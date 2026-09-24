@@ -3,8 +3,8 @@
 //! The simulation is deterministic for a given seed, so the browser demo,
 //! the gateway integration tests and the site simulator all see the same day.
 
-use crate::maps::{evse, heat_pump, regs_to_u32, u32_to_regs};
-use crate::sunspec::{self, NI_INT16, common, controls, inverter, meter, nameplate};
+use crate::maps::{battery, evse, heat_pump, regs_to_u32, u32_to_regs};
+use crate::sunspec::{self, NI_INT16, available, common, controls, inverter, meter, nameplate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeviceId {
@@ -12,6 +12,7 @@ pub enum DeviceId {
     Meter,
     Charger(usize),
     HeatPump(usize),
+    Battery(usize),
 }
 
 /// Modbus exceptions a device can answer with.
@@ -76,6 +77,25 @@ pub struct HeatPumpSim {
     pub online: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct BatterySim {
+    pub capacity_kwh: f64,
+    pub max_charge_kw: f64,
+    pub max_discharge_kw: f64,
+    pub soc_pct: f64,
+    pub setpoint_kw: f64,
+    pub power_kw: f64,
+    pub watchdog_s: f64,
+    last_setpoint_s: f64,
+    pub online: bool,
+}
+
+impl BatterySim {
+    pub fn in_watchdog(&self, now_s: f64) -> bool {
+        self.watchdog_s > 0.0 && now_s - self.last_setpoint_s > self.watchdog_s
+    }
+}
+
 /// A car arriving at a charger during the simulated day.
 #[derive(Debug, Clone, Copy)]
 pub struct Arrival {
@@ -92,6 +112,7 @@ pub struct SiteSim {
     pub inverters: Vec<InverterSim>,
     pub chargers: Vec<ChargerSim>,
     pub heat_pumps: Vec<HeatPumpSim>,
+    pub batteries: Vec<BatterySim>,
     pub meter_online: bool,
     pub base_kw: f64,
     pub arrivals: Vec<Arrival>,
@@ -152,6 +173,17 @@ impl SiteSim {
                 power_kw: 0.0,
                 online: true,
             }],
+            batteries: vec![BatterySim {
+                capacity_kwh: 100.0,
+                max_charge_kw: 50.0,
+                max_discharge_kw: 50.0,
+                soc_pct: 40.0,
+                setpoint_kw: 0.0,
+                power_kw: 0.0,
+                watchdog_s: 0.0,
+                last_setpoint_s: start_s,
+                online: true,
+            }],
             meter_online: true,
             base_kw: 18.0,
             next_arrival: 0,
@@ -185,9 +217,19 @@ impl SiteSim {
         self.heat_pumps.iter().map(|h| h.power_kw).sum()
     }
 
+    /// Battery power, + charging.
+    pub fn batteries_kw(&self) -> f64 {
+        self.batteries.iter().map(|b| b.power_kw).sum()
+    }
+
+    /// PV the sun allows right now, before any limit.
+    pub fn pv_available_kw(&self) -> f64 {
+        self.solar_fraction() * self.pv_installed_kw()
+    }
+
     /// Power at the grid connection point, + = import.
     pub fn grid_kw(&self) -> f64 {
-        self.base_kw + self.chargers_kw() + self.heat_pumps_kw() - self.pv_kw()
+        self.base_kw + self.chargers_kw() + self.heat_pumps_kw() + self.batteries_kw() - self.pv_kw()
     }
 
     /// Outdoor temperature, °C: 3 °C before sunrise to 15 °C mid-afternoon.
@@ -263,6 +305,18 @@ impl SiteSim {
             }
         }
 
+        // Batteries follow their setpoint within power and SoC limits; the
+        // BMS goes idle when the controller stops writing.
+        for b in &mut self.batteries {
+            let sp = if b.in_watchdog(t) { 0.0 } else { b.setpoint_kw };
+            let mut p = sp.clamp(-b.max_discharge_kw, b.max_charge_kw);
+            if (p > 0.0 && b.soc_pct >= 100.0) || (p < 0.0 && b.soc_pct <= 0.0) {
+                p = 0.0;
+            }
+            b.power_kw = p;
+            b.soc_pct = (b.soc_pct + p * hours / b.capacity_kwh * 100.0).clamp(0.0, 100.0);
+        }
+
         // Heat pump: demand from outdoor temperature (never below what the
         // compressor can modulate down to), capped by its limit.
         let outdoor = self.outdoor_c();
@@ -278,6 +332,7 @@ impl SiteSim {
             DeviceId::Meter => self.meter_online,
             DeviceId::Charger(i) => self.chargers.get(i).is_some_and(|d| d.online),
             DeviceId::HeatPump(i) => self.heat_pumps.get(i).is_some_and(|d| d.online),
+            DeviceId::Battery(i) => self.batteries.get(i).is_some_and(|d| d.online),
         }
     }
 
@@ -287,6 +342,7 @@ impl SiteSim {
             DeviceId::Meter => self.meter_online = online,
             DeviceId::Charger(i) => self.chargers[i].online = online,
             DeviceId::HeatPump(i) => self.heat_pumps[i].online = online,
+            DeviceId::Battery(i) => self.batteries[i].online = online,
         }
     }
 
@@ -298,6 +354,7 @@ impl SiteSim {
             DeviceId::Meter => (sunspec::BASE, self.meter_image()),
             DeviceId::Charger(i) => (0, self.charger_image(i)),
             DeviceId::HeatPump(i) => (0, self.heat_pump_image(i)),
+            DeviceId::Battery(i) => (0, self.battery_image(i)),
         }
     }
 
@@ -359,6 +416,17 @@ impl SiteSim {
                         _ => return Err(Exception::IllegalDataAddress),
                     }
                 }
+                DeviceId::Battery(i) => {
+                    let b = &mut self.batteries[i];
+                    match a {
+                        battery::SETPOINT => {
+                            b.setpoint_kw = v as i16 as f64 / 10.0;
+                            b.last_setpoint_s = t;
+                        }
+                        battery::WATCHDOG_S => b.watchdog_s = v as f64,
+                        _ => return Err(Exception::IllegalDataAddress),
+                    }
+                }
             }
         }
         Ok(())
@@ -397,7 +465,17 @@ impl SiteSim {
         k[controls::W_MAX_LIM_ENA] = inv.limit_enabled as u16;
         k[controls::W_MAX_LIM_PCT_SF] = (-1i16) as u16;
 
-        sunspec::build_image(&[(common::ID, c), (inverter::ID, m), (nameplate::ID, n), (controls::ID, k)])
+        let mut av = vec![0u16; available::LEN];
+        av[available::W_AVAIL] = sunspec::unscaled(inv.rated_kw * self.solar_fraction() * 1000.0, 1) as u16;
+        av[available::W_AVAIL_SF] = 1;
+
+        sunspec::build_image(&[
+            (common::ID, c),
+            (inverter::ID, m),
+            (nameplate::ID, n),
+            (controls::ID, k),
+            (available::ID, av),
+        ])
     }
 
     fn meter_image(&self) -> Vec<u16> {
@@ -446,6 +524,30 @@ impl SiteSim {
         r[heat_pump::POWER as usize] = (hp.power_kw * 10.0).round() as u16;
         r[heat_pump::DEMAND as usize] = (hp.demand_kw * 10.0).round() as u16;
         r[heat_pump::RATED as usize] = (hp.rated_kw * 10.0).round() as u16;
+        r
+    }
+}
+
+impl SiteSim {
+    fn battery_image(&self, i: usize) -> Vec<u16> {
+        let b = &self.batteries[i];
+        let mut r = vec![0u16; battery::LEN as usize];
+        r[battery::STATUS as usize] = if b.in_watchdog(self.t_s) {
+            battery::STATUS_WATCHDOG
+        } else if b.power_kw > 0.05 {
+            battery::STATUS_CHARGING
+        } else if b.power_kw < -0.05 {
+            battery::STATUS_DISCHARGING
+        } else {
+            battery::STATUS_IDLE
+        };
+        r[battery::SETPOINT as usize] = (b.setpoint_kw * 10.0).round() as i16 as u16;
+        r[battery::POWER as usize] = (b.power_kw * 10.0).round() as i16 as u16;
+        r[battery::SOC as usize] = (b.soc_pct * 10.0).round() as u16;
+        r[battery::CAPACITY as usize] = (b.capacity_kwh * 10.0).round() as u16;
+        r[battery::MAX_CHARGE as usize] = (b.max_charge_kw * 10.0).round() as u16;
+        r[battery::MAX_DISCHARGE as usize] = (b.max_discharge_kw * 10.0).round() as u16;
+        r[battery::WATCHDOG_S as usize] = b.watchdog_s as u16;
         r
     }
 }
@@ -512,6 +614,44 @@ mod tests {
         assert_eq!(sim.chargers[1].current_a, 6.0);
         let regs = sim.read(c, 0, evse::LEN).unwrap();
         assert_eq!(regs[evse::STATUS as usize], evse::STATUS_FAILSAFE);
+    }
+
+    #[test]
+    fn battery_follows_setpoint_and_goes_idle_without_controller() {
+        let mut sim = SiteSim::depot(20.0 * 3600.0, 7);
+        let b = DeviceId::Battery(0);
+        sim.write(b, battery::WATCHDOG_S, &[20]).unwrap();
+        sim.write(b, battery::SETPOINT, &[(-300i16) as u16]).unwrap(); // discharge 30 kW
+        let soc0 = sim.batteries[0].soc_pct;
+        for _ in 0..10 {
+            sim.step(1.0);
+        }
+        assert_eq!(sim.batteries[0].power_kw, -30.0);
+        assert!(sim.batteries[0].soc_pct < soc0);
+        let regs = sim.read(b, 0, battery::LEN).unwrap();
+        assert_eq!(regs[battery::POWER as usize] as i16, -300);
+        for _ in 0..15 {
+            sim.step(1.0);
+        }
+        assert_eq!(sim.batteries[0].power_kw, 0.0, "watchdog: idle");
+        assert_eq!(sim.read(b, 0, 1).unwrap()[0], battery::STATUS_WATCHDOG);
+    }
+
+    #[test]
+    fn inverter_reports_available_power_in_a_vendor_model() {
+        let mut sim = SiteSim::depot(12.0 * 3600.0, 7);
+        let (_, image) = sim.image(DeviceId::Inverter(0));
+        let models = sunspec::locate_models(&image[2..]).unwrap();
+        let av = models.iter().find(|m| m.id == available::ID).unwrap();
+        let body = inverter_controls_body();
+        sim.write(DeviceId::Inverter(0), body + controls::W_MAX_LIM_PCT as u16, &[200]).unwrap();
+        sim.write(DeviceId::Inverter(0), body + controls::W_MAX_LIM_ENA as u16, &[1]).unwrap();
+        for _ in 0..30 {
+            sim.step(1.0);
+        }
+        let r = sim.read(DeviceId::Inverter(0), av.body, 2).unwrap();
+        let avail = sunspec::scaled(r[0] as i16, r[1] as i16) / 1000.0;
+        assert!(avail > 30.0 && sim.inverters[0].output_kw <= 12.0 + 1e-9, "{avail}");
     }
 
     #[test]

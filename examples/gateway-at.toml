@@ -1,10 +1,11 @@
 # Demo site: a logistics depot with 120 kWp rooftop PV, four 22 kW chargers,
 # a 14 kW heat pump and a 100 kWh battery. Addresses match `site-sim` defaults.
-# For Austrian and Swiss rules see examples/gateway-at.toml and -ch.toml.
+# Austrian rules (ElWG): the DSO capped feed-in of this new PV system at 70%
+# of module peak power; consumption is only dimmed under a flexibility contract.
 
 [site]
 # Rules the DSO commands are applied under: "DE" (default), "AT" or "CH".
-# jurisdiction = "DE"
+jurisdiction = "AT"
 pv_installed_kw = 120.0
 connection_kw = 250.0       # grid connection rating; readings far beyond it are implausible
 # expected_annual_yield_kwh = 120000.0   # for curtailment budgets (CH); default 1,000 kWh/kWp
@@ -18,6 +19,11 @@ margin_kw = 0.3             # headroom below every limit
 min_dwell_s = 300.0         # min time before a car is rotated in or out
 control_period_ms = 1000
 stale_after_ms = 3000       # a device silent for this long counts as offline
+
+[policy]
+static_feed_in_cap_pct = 70.0     # the cap the DSO set for this connection (up to 70)
+contract_min_kw = 10.0             # contract: devices keep at least 10 kW while dimmed
+contract_max_minutes_per_day = 120 # and the DSO may use it at most 2 hours a day
 
 [[inverter]]
 address = "127.0.0.1:5020"

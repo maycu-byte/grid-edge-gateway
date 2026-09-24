@@ -6,6 +6,7 @@
 //!   meter       :5022   SunSpec 1/203
 //!   chargers    :5023-5026
 //!   heat pump   :5027
+//!   battery     :5028
 //!
 //! A small HTTP endpoint (default :8090) exposes the true physical state
 //! and lets you take devices offline to test the gateway's fallbacks:
@@ -98,6 +99,7 @@ fn devices(sim: &SiteSim) -> Vec<DeviceId> {
     d.push(DeviceId::Meter);
     d.extend((0..sim.chargers.len()).map(DeviceId::Charger));
     d.extend((0..sim.heat_pumps.len()).map(DeviceId::HeatPump));
+    d.extend((0..sim.batteries.len()).map(DeviceId::Battery));
     d
 }
 
@@ -107,6 +109,7 @@ fn device_name(dev: DeviceId) -> String {
         DeviceId::Meter => "meter".into(),
         DeviceId::Charger(i) => format!("charger{i}"),
         DeviceId::HeatPump(i) => format!("heatpump{i}"),
+        DeviceId::Battery(i) => format!("battery{i}"),
     }
 }
 
@@ -138,7 +141,7 @@ fn state_json(sim: &SiteSim) -> String {
         .collect();
     let hp = &sim.heat_pumps[0];
     format!(
-        r#"{{"t_s":{:.0},"grid_kw":{:.2},"pv_kw":{:.2},"base_kw":{:.2},"solar_fraction":{:.3},"outdoor_c":{:.1},"chargers":[{}],"heat_pump":{{"kw":{:.2},"demand_kw":{:.2},"limit_kw":{:.1}}},"inverter_limits":[{}],"meter_online":{}}}"#,
+        r#"{{"t_s":{:.0},"grid_kw":{:.2},"pv_kw":{:.2},"base_kw":{:.2},"solar_fraction":{:.3},"outdoor_c":{:.1},"chargers":[{}],"heat_pump":{{"kw":{:.2},"demand_kw":{:.2},"limit_kw":{:.1}}},"inverter_limits":[{}],"meter_online":{},"battery":{{"kw":{:.2},"soc_pct":{:.1}}},"pv_available_kw":{:.2}}}"#,
         sim.t_s,
         sim.grid_kw(),
         sim.pv_kw(),
@@ -155,6 +158,9 @@ fn state_json(sim: &SiteSim) -> String {
             .collect::<Vec<_>>()
             .join(","),
         sim.meter_online,
+        sim.batteries_kw(),
+        sim.batteries.first().map_or(0.0, |b| b.soc_pct),
+        sim.pv_available_kw(),
     )
 }
 

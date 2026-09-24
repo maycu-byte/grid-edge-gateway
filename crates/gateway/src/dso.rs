@@ -1,22 +1,37 @@
 //! The DSO link: an IEC 60870-5-104 controlled station.
 //!
-//! Point list (common address from the config, default 1):
+//! Point list (common address from the config, default 1). Commands:
 //!
-//! | IOA  | Type         | Direction | Meaning                                         |
-//! |------|--------------|-----------|-------------------------------------------------|
-//! | 5001 | C_SC_NA_1    | DSO → site| §14a EnWG dimming ON / OFF                      |
-//! | 5002 | C_SE_NC_1    | DSO → site| feed-in limit, % of installed PV (0–100)        |
-//! | 1001 | M_ME_TF_1    | site → DSO| active power at the grid connection, kW (+import)|
-//! | 1002 | M_ME_TF_1    | site → DSO| PV active power, kW                             |
-//! | 1003 | M_ME_TF_1    | site → DSO| controllable devices (steuVE) power, kW         |
-//! | 1004 | M_ME_TF_1    | site → DSO| steuVE power drawn from the grid, kW            |
-//! | 1005 | M_ME_TF_1    | site → DSO| Pmin,14a of this site, kW                       |
-//! | 1006 | M_ME_TF_1    | site → DSO| feed-in limit in force, %  (feedback of 5002)   |
-//! | 1007 | M_ME_TF_1    | site → DSO| PV limit sent to the inverters, %               |
-//! | 2001 | M_SP_TB_1    | site → DSO| §14a dimming active (feedback of 5001)          |
-//! | 2002 | M_SP_TB_1    | site → DSO| gradual release after dimming in progress       |
-//! | 2003 | M_SP_TB_1    | site → DSO| meter fallback (grid measurement lost)          |
-//! | 2004 | M_SP_TB_1    | site → DSO| field device fault (any device offline)         |
+//! | IOA  | Type      | Meaning                                                     |
+//! |------|-----------|-------------------------------------------------------------|
+//! | 5001 | C_SC_NA_1 | reduce consumption ON / OFF (§14a in DE, contract in AT/CH) |
+//! | 5002 | C_SE_NC_1 | feed-in limit, % of installed PV (0–100)                    |
+//! | 5003 | C_SC_NA_1 | emergency: immediate serious threat ON / OFF                |
+//!
+//! Monitoring (site → DSO), M_ME_TF_1 unless noted:
+//!
+//! | IOA  | Meaning                                                           |
+//! |------|-------------------------------------------------------------------|
+//! | 1001 | active power at the grid connection, kW (+ import)                |
+//! | 1002 | PV active power, kW                                               |
+//! | 1003 | controllable devices (steuVE) power, kW                           |
+//! | 1004 | steuVE power drawn from the grid, kW                              |
+//! | 1005 | consumption floor while dimmed, kW (Pmin,14a in DE)               |
+//! | 1006 | feed-in limit commanded, % (feedback of 5002)                     |
+//! | 1007 | PV limit sent to the inverters, %                                 |
+//! | 1008 | feed-in limit in force after country rules, %                     |
+//! | 1009 | battery power, kW (+ charging)                                    |
+//! | 1010 | battery state of charge, %                                        |
+//! | 1011 | consumption dimmed today, minutes                                 |
+//! | 1012 | PV energy curtailed this year, kWh                                |
+//! | 1013 | free curtailment budget used, % (CH)                              |
+//! | 2001 | M_SP_TB_1: consumption dimming active (feedback of 5001)          |
+//! | 2002 | M_SP_TB_1: gradual release in progress                            |
+//! | 2003 | M_SP_TB_1: meter fallback (grid measurement lost)                 |
+//! | 2004 | M_SP_TB_1: field device fault                                     |
+//! | 2005 | M_SP_TB_1: emergency active (feedback of 5003)                    |
+//! | 2006 | M_SP_TB_1: contract day limit reached, dimming refused            |
+//! | 2007 | M_SP_TB_1: curtailment budget used up                             |
 //!
 //! Measurements go out spontaneously when they move by more than the
 //! deadband, and all points in a general interrogation; always with a
@@ -36,8 +51,9 @@ use tracing::{info, warn};
 
 use crate::snapshot::{FrameLog, Snapshot, now_ms};
 
-pub const IOA_DIM_14A: u32 = 5001;
+pub const IOA_DIM: u32 = 5001;
 pub const IOA_FEED_IN_LIMIT: u32 = 5002;
+pub const IOA_EMERGENCY: u32 = 5003;
 
 #[derive(Clone)]
 pub struct Station {
@@ -50,25 +66,41 @@ pub struct Station {
 }
 
 /// Value of every monitored point, `None` = not available (sent as invalid).
-fn measurements(s: &Snapshot) -> [(u32, Option<f64>); 7] {
-    [
+fn measurements(s: &Snapshot) -> Vec<(u32, Option<f64>)> {
+    let battery_kw = (!s.batteries.is_empty()).then(|| s.batteries.iter().map(|b| b.kw).sum::<Option<f64>>()).flatten();
+    let soc = s.batteries.first().and_then(|b| b.soc_pct);
+    vec![
         (1001, s.grid_kw),
         (1002, s.pv_kw),
         (1003, Some(s.steuve_kw)),
         (1004, s.steuve_grid_kw),
-        (1005, Some(s.pmin_kw)),
+        (1005, Some(s.floor_kw)),
         (1006, Some(s.dso.feed_in_limit_pct)),
         (1007, Some(s.pv_limit_pct)),
+        (1008, Some(s.feed_in_limit_in_force_pct)),
+        (1009, battery_kw),
+        (1010, soc),
+        (1011, Some(s.totals.dimmed_min_today)),
+        (1012, Some(s.totals.curtailed_kwh_year)),
+        (1013, s.totals.curtailment_budget_used_pct),
     ]
 }
 
-fn single_points(s: &Snapshot) -> [(u32, bool); 4] {
-    [
+fn single_points(s: &Snapshot) -> Vec<(u32, bool)> {
+    vec![
         (2001, s.mode == "dimmed"),
         (2002, s.mode == "releasing"),
-        (2003, s.fallbacks.iter().any(|f| f == "meter offline")),
+        (2003, s.fallbacks.iter().any(|f| f.starts_with("meter"))),
         (2004, !s.fallbacks.is_empty()),
+        (2005, s.dso.emergency),
+        (2006, s.refusals.contains(&"contract day limit reached")),
+        (2007, s.refusals.contains(&"curtailment budget used up")),
     ]
+}
+
+/// Points whose deadband is 1 unit of their own (%, minutes, kWh) rather than kW.
+fn deadband_in_units(ioa: u32) -> bool {
+    matches!(ioa, 1006..=1008 | 1010..=1013)
 }
 
 fn float_element(v: Option<f64>, time: Cp56Time2a) -> Element {
@@ -189,8 +221,11 @@ impl Station {
                 );
                 vec![reply.encode()]
             }
-            Element::SingleCommand { on, select, .. } if obj.ioa == IOA_DIM_14A => {
-                self.command(a, obj, select, selected, |c| c.dim_14a = on)
+            Element::SingleCommand { on, select, .. } if obj.ioa == IOA_DIM => {
+                self.command(a, obj, select, selected, |c| c.dim = on)
+            }
+            Element::SingleCommand { on, select, .. } if obj.ioa == IOA_EMERGENCY => {
+                self.command(a, obj, select, selected, |c| c.emergency = on)
             }
             Element::SetpointFloat { value, select, .. } if obj.ioa == IOA_FEED_IN_LIMIT => {
                 if !(0.0..=100.0).contains(&value) || value.is_nan() {
@@ -228,7 +263,10 @@ impl Station {
                 }
                 self.commands.send_modify(apply);
                 let c = *self.commands.borrow();
-                info!("DSO command: §14a dimming {}, feed-in limit {:.0}%", c.dim_14a, c.feed_in_limit_pct);
+                info!(
+                    "DSO command: dim {}, feed-in limit {:.0}%, emergency {}",
+                    c.dim, c.feed_in_limit_pct, c.emergency
+                );
                 vec![
                     a.mirror(Cause::ActivationCon, false).encode(),
                     a.mirror(Cause::ActivationTermination, false).encode(),
@@ -281,7 +319,7 @@ impl Station {
         let time = Cp56Time2a::from_unix_ms(s.time_ms);
         let mut out = Vec::new();
         for (ioa, v) in measurements(s) {
-            let deadband = if matches!(ioa, 1006 | 1007) { 1.0 } else { self.deadband_kw };
+            let deadband = if deadband_in_units(ioa) { 1.0 } else { self.deadband_kw };
             let moved = match (reported_f.get(&ioa).copied().flatten(), v) {
                 (Some(old), Some(new)) => (new - old).abs() >= deadband,
                 (None, None) => false,

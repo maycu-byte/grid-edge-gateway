@@ -1,29 +1,35 @@
 //! grid-edge-gateway: site controller between a DSO control centre
 //! (IEC 60870-5-104) and the field devices of a prosumer site (Modbus TCP,
-//! SunSpec). Usage: `gateway [path/to/gateway.toml]`.
+//! SunSpec), under German, Austrian or Swiss rules.
+//! Usage: `gateway [path/to/gateway.toml]`.
 
 mod api;
 mod config;
 mod dso;
 mod field;
+mod persist;
+mod readings;
 mod snapshot;
 #[cfg(feature = "tls")]
 mod tls;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use control::{Controller, DsoCommands, Fallback, Mode, Readings};
-use devices::maps::evse;
+use control::{Clock, Controller, Mode};
+use iec104::Cp56Time2a;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 use tracing::{error, info, warn};
 
-use crate::config::Config;
+use crate::config::{Config, LinkLossPolicy};
 use crate::field::{FieldState, Slot};
-use crate::snapshot::{ChargerView, DsoView, HeatPumpView, InverterView, Snapshot, now_ms};
+use crate::snapshot::{DsoView, Snapshot, TotalsView, now_ms};
+
+/// How often the running totals are written to disk.
+const PERSIST_EVERY: Duration = Duration::from_secs(60);
 
 #[tokio::main]
 async fn main() {
@@ -39,31 +45,41 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    // Config::load validated all of this.
+    let site = cfg.site_config().expect("validated");
+    let jurisdiction = cfg.jurisdiction().expect("validated").code();
     let period = Duration::from_millis(cfg.site.control_period_ms);
     let stale = Duration::from_millis(cfg.site.stale_after_ms);
 
-    // DSO commands survive a restart: a dimming that was active before a
-    // power cut must still be active afterwards.
     let state_file = path.with_file_name("dso-state.json");
-    let initial = load_commands(&state_file);
-    info!("DSO commands at start: §14a dimming {}, feed-in limit {:.0}%", initial.dim_14a, initial.feed_in_limit_pct);
+    let saved = persist::load(&state_file);
+    let initial = saved.commands;
+    info!(
+        "rules: {jurisdiction}; DSO commands at start: dim {}, feed-in limit {:.0}%, emergency {}",
+        initial.dim, initial.feed_in_limit_pct, initial.emergency
+    );
     let commands = Arc::new(watch::channel(initial).0);
 
-    let mut controller = Controller::new(cfg.site_config());
-    info!("Pmin,14a of this site: {:.2} kW", controller.pmin_kw());
+    let mut controller = Controller::new(site.clone());
+    if let Some(t) = saved.totals {
+        controller = controller.with_totals(t);
+    }
+    info!("consumption floor while dimmed: {:.2} kW", controller.floor_kw());
 
     let field: field::Shared = Arc::new(Mutex::new(FieldState {
         inverters: vec![Slot::default(); cfg.inverters.len()],
         meter_kw: Slot::default(),
         chargers: vec![Slot::default(); cfg.chargers.len()],
         heat_pumps: vec![Slot::default(); cfg.heat_pumps.len()],
+        batteries: vec![Slot::default(); cfg.batteries.len()],
     }));
 
     // Until the first cycle has run, devices get conservative setpoints.
     let initial_setpoints = control::Setpoints {
-        pv_limit_pct: initial.feed_in_limit_pct,
+        pv_limit_pct: initial.feed_in_limit_pct.min(site.policy.static_feed_in_cap_pct.unwrap_or(100.0)),
         charger_current_a: cfg.chargers.iter().map(|c| c.failsafe_current_a).collect(),
         heat_pump_limit_kw: cfg.heat_pumps.iter().map(|h| 0.4 * h.rated_kw).collect(),
+        battery_kw: vec![0.0; cfg.batteries.len()],
     };
     let (setpoints_tx, setpoints_rx) = watch::channel(initial_setpoints);
     let (snapshot_tx, snapshot_rx) = watch::channel(Snapshot::default());
@@ -96,45 +112,88 @@ async fn main() {
     info!("dashboard API on http://{}", cfg.api.bind);
     tokio::spawn(async move { axum::serve(api_listener, app).await });
 
-    // Persist DSO commands on every change.
-    {
-        let mut rx = commands.subscribe();
-        tokio::spawn(async move {
-            while rx.changed().await.is_ok() {
-                let c = *rx.borrow_and_update();
-                save_commands(&state_file, &c);
-            }
-        });
-    }
-
     // Control loop
     let t0 = Instant::now();
     let mut tick = tokio::time::interval(period);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_fallbacks = Vec::new();
+    let mut last_refusals = Vec::new();
+    let mut last_persist = Instant::now();
+    let mut last_commands = initial;
+    let mut link_seen = Instant::now();
+    let mut overruns = 0u64;
     loop {
         tick.tick().await;
+        let cycle_start = Instant::now();
+
+        // Link-loss policy: without any control centre for too long, lift
+        // the commands (an emergency stays until the DSO clears it).
+        if connections.load(Ordering::SeqCst) > 0 {
+            link_seen = Instant::now();
+        } else if cfg.iec104.on_link_loss == LinkLossPolicy::Release
+            && link_seen.elapsed() > Duration::from_secs(cfg.iec104.link_loss_release_s)
+        {
+            let c = *commands.borrow();
+            if c.dim || c.feed_in_limit_pct < 100.0 {
+                warn!("no DSO connection for {} s: lifting dim and feed-in limit", cfg.iec104.link_loss_release_s);
+                commands.send_modify(|c| {
+                    c.dim = false;
+                    c.feed_in_limit_pct = 100.0;
+                });
+            }
+        }
+
         let cmd = *commands.borrow();
-        let (readings, views) = collect(&field.lock().unwrap(), stale);
-        let (sp, st) = controller.step(t0.elapsed().as_secs_f64(), &cmd, &readings);
+        let (readings, views) = readings::collect(&field.lock().unwrap(), stale);
+        let now = now_ms();
+        let clock = Clock {
+            t_s: t0.elapsed().as_secs_f64(),
+            day: now.div_euclid(86_400_000),
+            year: 2000 + Cp56Time2a::from_unix_ms(now).year as i32,
+        };
+        let (sp, st) = controller.step(&clock, &cmd, &readings);
 
         // Devices get one staleness window to answer before we complain.
         if st.fallbacks != last_fallbacks && t0.elapsed() > stale {
             warn!("fallbacks: {:?}", st.fallbacks);
             last_fallbacks = st.fallbacks.clone();
         }
-        let (inverters, mut chargers, mut heat_pumps) = views;
-        for (c, &a) in chargers.iter_mut().zip(&sp.charger_current_a) {
+        if st.refusals != last_refusals {
+            if !st.refusals.is_empty() {
+                warn!("DSO command not applied: {:?}", st.refusals);
+            }
+            last_refusals = st.refusals.clone();
+        }
+        if cmd != last_commands || last_persist.elapsed() > PERSIST_EVERY {
+            persist::save(&state_file, &cmd, &st.totals);
+            last_commands = cmd;
+            last_persist = Instant::now();
+        }
+
+        let mut v = views;
+        for (c, &a) in v.chargers.iter_mut().zip(&sp.charger_current_a) {
             c.setpoint_a = a;
         }
-        for (h, &kw) in heat_pumps.iter_mut().zip(&sp.heat_pump_limit_kw) {
+        for (h, &kw) in v.heat_pumps.iter_mut().zip(&sp.heat_pump_limit_kw) {
             h.limit_kw = kw;
         }
+        for (b, &kw) in v.batteries.iter_mut().zip(&sp.battery_kw) {
+            b.setpoint_kw = kw;
+        }
+        let cycle_ms = cycle_start.elapsed().as_secs_f64() * 1000.0;
+        if cycle_ms > period.as_secs_f64() * 1000.0 {
+            overruns += 1;
+            if overruns.is_power_of_two() {
+                warn!("control cycle took {cycle_ms:.0} ms, longer than the {period:?} period ({overruns} overruns)");
+            }
+        }
         let snap = Snapshot {
-            time_ms: now_ms(),
+            time_ms: now,
+            jurisdiction,
             dso: DsoView {
-                dim_14a: cmd.dim_14a,
+                dim: cmd.dim,
                 feed_in_limit_pct: cmd.feed_in_limit_pct,
+                emergency: cmd.emergency,
                 connections: connections.load(Ordering::SeqCst),
             },
             mode: match st.mode {
@@ -144,129 +203,32 @@ async fn main() {
             },
             grid_kw: readings.grid_kw,
             pv_kw: readings.pv_kw,
+            pv_available_kw: readings.pv_available_kw,
             base_load_kw: st.base_load_kw,
             pv_surplus_kw: st.pv_surplus_kw,
             steuve_kw: st.steuve_kw,
             steuve_grid_kw: st.steuve_grid_kw,
             steuve_budget_kw: st.steuve_budget_kw,
-            pmin_kw: st.pmin_kw,
+            floor_kw: st.floor_kw,
+            feed_in_limit_in_force_pct: st.feed_in_limit_pct,
             allowed_export_kw: st.allowed_export_kw,
             pv_limit_pct: sp.pv_limit_pct,
-            inverters,
-            chargers,
-            heat_pumps,
-            fallbacks: st.fallbacks.iter().map(fallback_name).collect(),
+            inverters: v.inverters,
+            chargers: v.chargers,
+            heat_pumps: v.heat_pumps,
+            batteries: v.batteries,
+            totals: TotalsView {
+                dimmed_min_today: st.totals.dimmed_s_today / 60.0,
+                produced_kwh_year: st.totals.produced_kwh_year,
+                curtailed_kwh_year: st.totals.curtailed_kwh_year,
+                curtailment_budget_used_pct: st.curtailment_budget_used_pct,
+            },
+            refusals: st.refusals.iter().map(readings::refusal_name).collect(),
+            fallbacks: st.fallbacks.iter().map(readings::fallback_name).collect(),
+            cycle_ms,
         };
         setpoints_tx.send_replace(sp);
         snapshot_tx.send_replace(snap);
-    }
-}
-
-type Views = (Vec<InverterView>, Vec<ChargerView>, Vec<HeatPumpView>);
-
-/// Turns the field state into controller readings, marking stale devices offline.
-fn collect(f: &FieldState, stale: Duration) -> (Readings, Views) {
-    let inverters: Vec<Option<field::InverterReading>> = f.inverters.iter().map(|s| s.fresh(stale)).collect();
-    // The PV total is only known if every inverter answers.
-    let pv_kw = inverters.iter().map(|r| r.as_ref().map(|r| r.kw)).sum::<Option<f64>>();
-    let chargers: Vec<Option<field::ChargerReading>> = f.chargers.iter().map(|s| s.fresh(stale)).collect();
-    let heat_pumps: Vec<Option<field::HeatPumpReading>> = f.heat_pumps.iter().map(|s| s.fresh(stale)).collect();
-
-    let readings = Readings {
-        grid_kw: f.meter_kw.fresh(stale),
-        pv_kw,
-        chargers: chargers
-            .iter()
-            .map(|c| match c {
-                Some(c) => control::ChargerReading {
-                    online: true,
-                    car_waiting: matches!(
-                        c.status,
-                        evse::STATUS_CONNECTED | evse::STATUS_CHARGING | evse::STATUS_FAILSAFE
-                    ),
-                    current_a: c.current_a,
-                    power_kw: c.kw,
-                    session_kwh: c.session_kwh,
-                },
-                None => control::ChargerReading::default(),
-            })
-            .collect(),
-        heat_pumps: heat_pumps
-            .iter()
-            .map(|h| match h {
-                Some(h) => control::HeatPumpReading { online: true, power_kw: h.kw, demand_kw: h.demand_kw },
-                None => control::HeatPumpReading::default(),
-            })
-            .collect(),
-    };
-
-    let views = (
-        inverters
-            .iter()
-            .map(|r| InverterView {
-                online: r.is_some(),
-                kw: r.as_ref().map(|r| r.kw),
-                rated_kw: r.as_ref().map(|r| r.rated_kw),
-            })
-            .collect(),
-        chargers
-            .iter()
-            .map(|c| ChargerView {
-                online: c.is_some(),
-                status: match c.as_ref().map(|c| c.status) {
-                    None => "offline",
-                    Some(evse::STATUS_AVAILABLE) => "available",
-                    Some(evse::STATUS_CONNECTED) => "waiting",
-                    Some(evse::STATUS_CHARGING) => "charging",
-                    Some(evse::STATUS_FAILSAFE) => "failsafe",
-                    Some(evse::STATUS_FINISHED) => "finished",
-                    Some(_) => "unknown",
-                },
-                current_a: c.as_ref().map(|c| c.current_a),
-                setpoint_a: 0.0,
-                kw: c.as_ref().map(|c| c.kw),
-                session_kwh: c.as_ref().map(|c| c.session_kwh),
-            })
-            .collect(),
-        heat_pumps
-            .iter()
-            .map(|h| HeatPumpView {
-                online: h.is_some(),
-                kw: h.as_ref().map(|h| h.kw),
-                demand_kw: h.as_ref().map(|h| h.demand_kw),
-                limit_kw: 0.0,
-            })
-            .collect(),
-    );
-    (readings, views)
-}
-
-fn fallback_name(f: &Fallback) -> String {
-    match f {
-        Fallback::MeterOffline => "meter offline".into(),
-        Fallback::PvOffline => "inverter offline".into(),
-        Fallback::ChargerOffline(i) => format!("charger{i} offline"),
-        Fallback::HeatPumpOffline(i) => format!("heatpump{i} offline"),
-    }
-}
-
-fn load_commands(path: &Path) -> DsoCommands {
-    let parsed = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    match parsed {
-        Some(v) => DsoCommands {
-            dim_14a: v["dim_14a"].as_bool().unwrap_or(false),
-            feed_in_limit_pct: v["feed_in_limit_pct"].as_f64().unwrap_or(100.0).clamp(0.0, 100.0),
-        },
-        None => DsoCommands::default(),
-    }
-}
-
-fn save_commands(path: &Path, c: &DsoCommands) {
-    let text = serde_json::json!({ "dim_14a": c.dim_14a, "feed_in_limit_pct": c.feed_in_limit_pct }).to_string();
-    // Write-then-rename so a power cut never leaves a half-written file.
-    let tmp = path.with_extension("json.tmp");
-    if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, path)) {
-        warn!("could not persist DSO commands: {e}");
     }
 }
 
