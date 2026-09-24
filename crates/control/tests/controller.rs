@@ -172,3 +172,19 @@ fn dimming_invariant_holds_for_random_states() {
         assert!(s.heat_pump_limit_kw[0] == 0.0 || s.heat_pump_limit_kw[0] >= 3.0);
     }
 }
+
+#[test]
+fn while_dimmed_a_passing_cloud_lowers_the_budget_at_once_and_the_sun_raises_it_only_once_it_stays() {
+    let mut c = Controller::new(depot());
+    let dim = DsoCommands { dim: true, ..Default::default() };
+    let floor = c.floor_kw() - c.config().margin_kw;
+    let mut budget = |t: f64, pv: f64| {
+        // 10 kW of base load: PV surplus = pv − 10
+        let (_, st) = c.step(&clock(t), &dim, &readings(10.0, pv, [true; 4], &[6.0; 4], 0.0, 0.0));
+        st.steuve_budget_kw.unwrap()
+    };
+    assert!((budget(0.0, 20.0) - (floor + 10.0)).abs() < 1e-9);
+    assert!((budget(5.0, 14.0) - (floor + 4.0)).abs() < 1e-9, "a drop counts at once");
+    assert!((budget(10.0, 20.0) - (floor + 4.0)).abs() < 1e-9, "a rise waits");
+    assert!((budget(36.0, 20.0) - (floor + 10.0)).abs() < 1e-9, "30 s later the sun counts again");
+}

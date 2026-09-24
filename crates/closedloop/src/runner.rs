@@ -9,7 +9,7 @@ use control::{
 };
 use devices::climate::{Climate, Season, Tariff};
 use devices::sim::{Building, SimConfig, SiteSim, Weather};
-use planner::{BatteryModel, EvRequest, HeatPumpModel, Plan, PlanInput, Uncertainty, Weights};
+use planner::{BatteryModel, DemandCharge, EvRequest, HeatPumpModel, Plan, PlanInput, Uncertainty, Weights};
 
 use crate::adapter::{self, Details};
 use crate::forecast::Forecaster;
@@ -34,14 +34,17 @@ pub enum Strategy {
     /// The real-time controller alone: self-consumption battery, cars at
     /// full power, the heat pump's own thermostat.
     Rules,
-    /// MPC planner on top of the real-time controller.
-    Mpc { uncertainty: Uncertainty, dim_forecast: bool },
+    /// MPC planner on top of the real-time controller. `dim_forecast`: it
+    /// knows the DSO's announced dimming windows; `peak_aware`: its
+    /// objective includes the demand charge on the highest quarter-hour.
+    Mpc { uncertainty: Uncertainty, dim_forecast: bool, peak_aware: bool },
 }
 
 impl Strategy {
     pub fn name(&self) -> &'static str {
         match self {
             Strategy::Rules => "rules",
+            Strategy::Mpc { peak_aware: false, .. } => "mpc-no-peak",
             Strategy::Mpc { dim_forecast: false, .. } => "mpc-blind",
             Strategy::Mpc { uncertainty: Uncertainty::Deterministic, .. } => "mpc",
             Strategy::Mpc { uncertainty: Uncertainty::Chance { .. }, .. } => "mpc-cc",
@@ -50,18 +53,23 @@ impl Strategy {
     }
 
     pub fn parse(s: &str) -> Option<Self> {
+        let mpc = |uncertainty, dim_forecast, peak_aware| Strategy::Mpc { uncertainty, dim_forecast, peak_aware };
         Some(match s {
             "rules" => Strategy::Rules,
-            "mpc" => Strategy::Mpc { uncertainty: Uncertainty::Deterministic, dim_forecast: true },
-            "mpc-cc" => Strategy::Mpc { uncertainty: Uncertainty::Chance { epsilon: 0.05 }, dim_forecast: true },
-            "mpc-robust" => Strategy::Mpc { uncertainty: Uncertainty::Robust, dim_forecast: true },
-            "mpc-blind" => Strategy::Mpc { uncertainty: Uncertainty::Deterministic, dim_forecast: false },
+            "mpc" => mpc(Uncertainty::Deterministic, true, true),
+            "mpc-cc" => mpc(Uncertainty::Chance { epsilon: 0.05 }, true, true),
+            "mpc-robust" => mpc(Uncertainty::Robust, true, true),
+            "mpc-blind" => mpc(Uncertainty::Deterministic, false, true),
+            "mpc-no-peak" => mpc(Uncertainty::Deterministic, true, false),
             _ => return None,
         })
     }
 
     pub fn study_set() -> Vec<Strategy> {
-        ["rules", "mpc-blind", "mpc", "mpc-cc", "mpc-robust"].iter().filter_map(|s| Strategy::parse(s)).collect()
+        ["rules", "mpc-no-peak", "mpc-blind", "mpc", "mpc-cc", "mpc-robust"]
+            .iter()
+            .filter_map(|s| Strategy::parse(s))
+            .collect()
     }
 }
 
@@ -134,6 +142,7 @@ pub fn site_config(j: Jurisdiction) -> SiteConfig {
         margin_kw: 0.3,
         min_dwell_s: 300.0,
         deadline_guard_s: 900.0,
+        surplus_hold_s: 30.0,
         import_target_kw: 0.0,
     }
 }
@@ -274,7 +283,7 @@ impl ClosedLoop {
     }
 
     fn replan(&mut self, r: &Readings, details: &Details) {
-        let Strategy::Mpc { uncertainty, dim_forecast } = self.strategy else { return };
+        let Strategy::Mpc { uncertainty, dim_forecast, peak_aware } = self.strategy else { return };
         let t = self.sim.t_s;
         let cfg = self.ctl.config().clone();
         let h = self.forecaster.horizon(t, PLAN_STEPS, PLAN_STEP_H);
@@ -354,6 +363,11 @@ impl ClosedLoop {
             heat_pump,
             uncertainty,
             recovery_steps: 8,
+            // The plan stands for a day of the billing period (its horizon).
+            demand_charge: peak_aware.then(|| DemandCharge {
+                eur_per_kw: Tariff::default().demand_eur_per_kw(PLAN_STEPS as f64 * PLAN_STEP_H),
+                peak_so_far_kw: self.metrics.peak_quarter_kw,
+            }),
             weights: Weights::default(),
         };
         match planner::plan(&input) {

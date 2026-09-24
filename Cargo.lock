@@ -1497,6 +1497,7 @@ dependencies = [
 name = "web-demo"
 version = "0.1.0"
 dependencies = [
+ "closedloop",
  "control",
  "devices",
  "iec104",

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+closedloop = { version = "0.1.0", path = "../closedloop" }
 control = { version = "0.1.0", path = "../control" }
 devices = { version = "0.1.0", path = "../devices" }
 iec104 = { version = "0.1.0", path = "../iec104" }

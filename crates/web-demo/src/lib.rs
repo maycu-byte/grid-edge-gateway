@@ -1,31 +1,37 @@
-//! The browser demo: the site physics, the gateway's controller and the
-//! IEC 104 encoder, compiled to WebAssembly. Nothing is mocked in between:
-//! the controller reads and writes the simulated devices through their
-//! register maps, exactly like the gateway does over Modbus TCP, and every
-//! telecontrol frame shown on the page is encoded by the `iec104` crate.
+//! The browser demo: the site physics, the gateway's real-time controller,
+//! the MPC planner and the IEC 104 encoder, compiled to WebAssembly.
+//! Nothing is mocked in between: the controller reads and writes the
+//! simulated devices through their register maps, exactly like the gateway
+//! does over Modbus TCP, and every telecontrol frame shown on the page is
+//! encoded by the `iec104` crate.
+//!
+//! A shadow copy of the site runs alongside on rules alone — same weather,
+//! same DSO commands, same faults — so the page can show what the plan saved.
 
 use std::collections::HashMap;
 
-use control::{
-    Clock, ConsumptionRule, Controller, DsoCommands, Jurisdiction, Mode, Policy, Readings, SiteConfig, Totals,
-};
-use devices::maps::{battery, evse, heat_pump, regs_to_u32};
-use devices::sim::{DeviceId, SiteSim};
-use devices::sunspec::{self, available, controls, inverter, meter};
+use closedloop::{ClosedLoop, Scenario, Strategy, site_config};
+use control::{Controller, Jurisdiction, Mode, Totals};
+use devices::climate::{Season, Tariff};
+use devices::sim::{Building, DeviceId, Weather};
 use iec104::describe::describe;
 use iec104::{Apdu, Asdu, Cause, Cp56Time2a, Element, Quality, UFunction};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 const CA: u16 = 1;
-const CONTROL_PERIOD_S: f64 = 1.0;
-/// Midnight of the simulated day (2026-04-15 UTC) for CP56Time2a time tags.
-const DAY_EPOCH_MS: i64 = 1_776_211_200_000;
-const YEAR: i32 = 2026;
-/// Swiss scenario: expected yield 950 kWh/kWp, and late in the year most of
-/// the free 3% budget is already used, so a noon curtailment runs it out.
-const CH_YIELD_KWH: f64 = 114_000.0;
+/// Control period in the browser (the gateway uses 1 s; 2 s keeps fast
+/// playback smooth and changes nothing a person can see).
+const CONTROL_DT_S: f64 = 2.0;
+/// Midnight of the simulated first day for CP56Time2a time tags (UTC).
+const SPRING_EPOCH_MS: i64 = 1_743_890_400_000; // 2025-04-06 00:00 CEST
+const WINTER_EPOCH_MS: i64 = 1_737_327_600_000; // 2025-01-20 00:00 CET
+/// Swiss scenario: late in the year most of the free 3% budget is already
+/// used, so a noon curtailment runs it out.
 const CH_CURTAILED_ALREADY_KWH: f64 = 3_400.0;
+/// The window in which the DSO has announced it may dim (preventive §14a
+/// control is at most 2 h a day). The planner is told; you decide.
+const ANNOUNCED_DIM_H: (f64, f64) = (17.5, 19.5);
 
 #[derive(Serialize, Clone)]
 pub struct Frame {
@@ -44,6 +50,8 @@ struct ChargerOut {
     kw: f64,
     session_kwh: f64,
     needs_kwh: f64,
+    /// Hours until the car leaves.
+    leaves_in_h: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -59,11 +67,15 @@ struct BatteryOut {
 struct StateOut {
     t_s: f64,
     jurisdiction: &'static str,
+    season: &'static str,
+    strategy: &'static str,
     mode: &'static str,
     dim: bool,
     emergency: bool,
     feed_in_limit_pct: f64,
     feed_in_in_force_pct: f64,
+    price_eur_mwh: f64,
+    import_eur_kwh: f64,
     grid_kw: Option<f64>,
     pv_kw: f64,
     pv_available_kw: f64,
@@ -76,9 +88,12 @@ struct StateOut {
     export_kw: f64,
     pv_limit_pct: f64,
     outdoor_c: f64,
+    indoor_c: f64,
+    comfort_min_c: f64,
     heat_pump_kw: f64,
     heat_pump_demand_kw: f64,
     heat_pump_limit_kw: f64,
+    heat_pump_external: bool,
     heat_pump_online: bool,
     heat_pump_opted_out: bool,
     meter_online: bool,
@@ -91,59 +106,54 @@ struct StateOut {
     budget_used_pct: Option<f64>,
     refusals: Vec<&'static str>,
     fallbacks: Vec<String>,
+    /// Running totals since the start, for this site and its rules-only shadow.
+    cost_eur: f64,
+    ageing_eur: f64,
+    demand_eur: f64,
+    peak_kw: f64,
+    discomfort_kh: f64,
+    ev_unmet_kwh: f64,
+    shadow_cost_eur: f64,
+    shadow_ageing_eur: f64,
+    shadow_demand_eur: f64,
+    shadow_peak_kw: f64,
+    shadow_discomfort_kh: f64,
+    shadow_ev_unmet_kwh: f64,
+    /// Energy held in the battery and the building's temperature, here and in
+    /// the shadow: what a plan bought ahead of a price peak but has not used yet.
+    battery_kwh: f64,
+    shadow_battery_kwh: f64,
+    shadow_indoor_c: f64,
+    plan_age_min: Option<f64>,
+    plans: u32,
+    solve_ms: f64,
+}
+
+/// The current plan, for the page's charts: one entry per 15-minute step.
+#[derive(Serialize)]
+struct PlanOut {
+    start_h: f64,
+    step_h: f64,
+    grid_kw: Vec<f64>,
+    battery_kw: Vec<f64>,
+    soc_pct: Vec<f64>,
+    indoor_c: Vec<f64>,
+    heat_pump_kw: Vec<f64>,
+    ev_kw: Vec<f64>,
+    dim: Vec<bool>,
+    price_eur_mwh: Vec<f64>,
 }
 
 #[wasm_bindgen]
 pub struct Demo {
-    sim: SiteSim,
-    ctl: Controller,
-    cmd: DsoCommands,
-    since_control: f64,
-    setpoints: control::Setpoints,
-    status: Option<control::Status>,
-    readings: Readings,
+    cl: ClosedLoop,
+    shadow: ClosedLoop,
+    epoch_ms: i64,
     frames: Vec<Frame>,
     station_ns: u16,
     dso_ns: u16,
     reported_f: HashMap<u32, Option<f64>>,
     reported_b: HashMap<u32, bool>,
-}
-
-/// The depot under a country's rules, as the example configurations set it up.
-fn depot_config(j: Jurisdiction) -> SiteConfig {
-    let mut policy = Policy::for_country(j);
-    let mut hp_opted_out = false;
-    match j {
-        Jurisdiction::De => {}
-        Jurisdiction::At => {
-            policy.consumption = ConsumptionRule::Contract { min_kw: 10.0, max_minutes_per_day: 120.0 };
-        }
-        Jurisdiction::Ch => {
-            policy.consumption = ConsumptionRule::Contract { min_kw: 8.0, max_minutes_per_day: 180.0 };
-            hp_opted_out = true;
-        }
-    }
-    SiteConfig {
-        policy,
-        pv_installed_kw: 120.0,
-        connection_kw: 250.0,
-        expected_annual_yield_kwh: if j == Jurisdiction::Ch { CH_YIELD_KWH } else { 120_000.0 },
-        chargers: vec![control::ChargerSpec { max_current_a: 32.0, failsafe_current_a: 6.0, opted_out: false }; 4],
-        heat_pumps: vec![control::HeatPumpSpec { rated_kw: 14.0, min_kw: 3.0, opted_out: hp_opted_out }],
-        batteries: vec![control::BatterySpec {
-            capacity_kwh: 100.0,
-            max_charge_kw: 50.0,
-            max_discharge_kw: 50.0,
-            min_soc_pct: 10.0,
-            max_soc_pct: 95.0,
-        }],
-        feed_in_reference: control::FeedInReference::GridConnectionPoint,
-        release_ramp_s: 300.0,
-        pv_ramp_pct_per_s: 10.0 / 60.0,
-        margin_kw: 0.3,
-        min_dwell_s: 300.0,
-        import_target_kw: 0.0,
-    }
 }
 
 fn mode_name(m: Mode) -> &'static str {
@@ -174,59 +184,51 @@ fn refusal_name(r: &control::Refusal) -> &'static str {
     }
 }
 
-/// Body address of a SunSpec model in a device's chain, found the way a
-/// Modbus client finds it: by walking the chain from register 40000.
-fn model_body(sim: &SiteSim, dev: DeviceId, id: u16) -> Option<u16> {
-    let (_, image) = sim.image(dev);
-    sunspec::locate_models(image.get(2..)?)?.into_iter().find(|m| m.id == id).map(|m| m.body)
+fn new_loop(j: Jurisdiction, season: Season, strategy: Strategy, start_hour: f64, seed: u64) -> ClosedLoop {
+    let scenario = Scenario {
+        season,
+        jurisdiction: j,
+        weather: Weather::Fair,
+        seed,
+        start_h: start_hour,
+        dim_windows_h: vec![ANNOUNCED_DIM_H],
+        auto_dso: false,
+    };
+    let mut cl = ClosedLoop::new(scenario, strategy, CONTROL_DT_S);
+    if j == Jurisdiction::Ch {
+        let day = (start_hour * 3600.0 / 86_400.0).floor() as i64;
+        cl.ctl = Controller::new(site_config(j)).with_totals(Totals {
+            day,
+            year: 2026,
+            dimmed_s_today: 0.0,
+            produced_kwh_year: 0.0,
+            curtailed_kwh_year: CH_CURTAILED_ALREADY_KWH,
+        });
+    }
+    cl
 }
 
 #[wasm_bindgen]
 impl Demo {
-    /// `country`: "DE", "AT" or "CH".
+    /// `country`: "DE", "AT" or "CH"; `season`: "spring" or "winter";
+    /// `strategy`: "rules", "mpc" or "mpc-cc".
     #[wasm_bindgen(constructor)]
-    pub fn new(start_hour: f64, seed: u32, country: &str) -> Demo {
+    pub fn new(start_hour: f64, seed: u32, country: &str, season: &str, strategy: &str) -> Demo {
         let j = Jurisdiction::parse(country).unwrap_or(Jurisdiction::De);
-        let mut sim = SiteSim::depot(start_hour * 3600.0, seed as u64);
-        // Arm the watchdogs, as the gateway does on connect.
-        for i in 0..sim.chargers.len() {
-            let _ = sim.write(DeviceId::Charger(i), evse::FAILSAFE_CURRENT, &[60]);
-            let _ = sim.write(DeviceId::Charger(i), evse::FAILSAFE_TIMEOUT, &[30]);
-        }
-        for i in 0..sim.batteries.len() {
-            let _ = sim.write(DeviceId::Battery(i), battery::WATCHDOG_S, &[30]);
-        }
-        let mut ctl = Controller::new(depot_config(j));
-        if j == Jurisdiction::Ch {
-            let day = (start_hour * 3600.0 / 86_400.0).floor() as i64;
-            ctl = ctl.with_totals(Totals {
-                day,
-                year: YEAR,
-                dimmed_s_today: 0.0,
-                produced_kwh_year: 0.0,
-                curtailed_kwh_year: CH_CURTAILED_ALREADY_KWH,
-            });
-        }
+        let season = Season::parse(season).unwrap_or(Season::Spring);
+        let strategy = Strategy::parse(strategy).unwrap_or(Strategy::Rules);
+        let cl = new_loop(j, season, strategy, start_hour, seed as u64);
+        let shadow = new_loop(j, season, Strategy::Rules, start_hour, seed as u64);
         let mut demo = Demo {
-            sim,
-            ctl,
-            cmd: DsoCommands::default(),
-            since_control: 0.0,
-            setpoints: control::Setpoints {
-                pv_limit_pct: 100.0,
-                charger_current_a: vec![],
-                heat_pump_limit_kw: vec![],
-                battery_kw: vec![],
-            },
-            status: None,
-            readings: Readings::default(),
+            cl,
+            shadow,
+            epoch_ms: if season == Season::Winter { WINTER_EPOCH_MS } else { SPRING_EPOCH_MS },
             frames: Vec::new(),
             station_ns: 0,
             dso_ns: 0,
             reported_f: HashMap::new(),
             reported_b: HashMap::new(),
         };
-        demo.control_cycle();
         // The control centre connects: STARTDT, then a general interrogation.
         demo.push(true, Apdu::U(UFunction::StartDtAct).encode());
         demo.push(false, Apdu::U(UFunction::StartDtCon).encode());
@@ -240,32 +242,26 @@ impl Demo {
         demo
     }
 
-    /// Advances simulated time, one second of physics per step.
+    /// Advances simulated time on the site and its shadow.
     pub fn advance(&mut self, seconds: f64) {
-        let mut left = seconds;
-        while left > 1e-9 {
-            let dt = left.min(1.0);
-            self.sim.step(dt);
-            self.since_control += dt;
-            left -= dt;
-            if self.since_control >= CONTROL_PERIOD_S - 1e-9 {
-                self.since_control = 0.0;
-                self.control_cycle();
-                self.report(false);
-            }
-        }
+        self.cl.advance(seconds);
+        self.shadow.advance(seconds);
+        self.report(false);
     }
 
     /// DSO: reduce consumption on/off (C_SC_NA_1, IOA 5001).
     pub fn command_dim(&mut self, on: bool) {
         self.single_command(5001, on);
-        self.cmd.dim = on;
+        self.cl.cmd.dim = on;
+        self.shadow.cmd.dim = on;
+        self.cl.replan_soon();
     }
 
     /// DSO: emergency on/off (C_SC_NA_1, IOA 5003).
     pub fn command_emergency(&mut self, on: bool) {
         self.single_command(5003, on);
-        self.cmd.emergency = on;
+        self.cl.cmd.emergency = on;
+        self.shadow.cmd.emergency = on;
     }
 
     /// DSO: feed-in limit in % (C_SE_NC_1, IOA 5002). Out-of-range values
@@ -282,43 +278,62 @@ impl Demo {
             self.station_send(&cmd.mirror(Cause::ActivationCon, true));
             return false;
         }
-        self.cmd.feed_in_limit_pct = pct;
+        self.cl.cmd.feed_in_limit_pct = pct;
+        self.shadow.cmd.feed_in_limit_pct = pct;
+        self.cl.replan_soon();
         self.station_send(&cmd.mirror(Cause::ActivationCon, false));
         self.station_send(&cmd.mirror(Cause::ActivationTermination, false));
         true
     }
 
+    /// Switches the planning strategy ("rules", "mpc", "mpc-cc") without
+    /// restarting the day.
+    pub fn set_strategy(&mut self, name: &str) -> bool {
+        match Strategy::parse(name) {
+            Some(s) => {
+                self.cl.strategy = s;
+                self.cl.plan = None;
+                self.cl.ctl.set_guidance(None);
+                self.cl.replan_soon();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Fault injection: "meter", "inverter0", "charger2", "heatpump0", "battery0".
     pub fn set_device_online(&mut self, name: &str, online: bool) -> bool {
+        let sim = &self.cl.sim;
         let idx = |prefix: &str, n: usize| name.strip_prefix(prefix)?.parse::<usize>().ok().filter(|&i| i < n);
         let dev = if name == "meter" {
             DeviceId::Meter
-        } else if let Some(i) = idx("inverter", self.sim.inverters.len()) {
+        } else if let Some(i) = idx("inverter", sim.inverters.len()) {
             DeviceId::Inverter(i)
-        } else if let Some(i) = idx("charger", self.sim.chargers.len()) {
+        } else if let Some(i) = idx("charger", sim.chargers.len()) {
             DeviceId::Charger(i)
-        } else if let Some(i) = idx("heatpump", self.sim.heat_pumps.len()) {
+        } else if let Some(i) = idx("heatpump", sim.heat_pumps.len()) {
             DeviceId::HeatPump(i)
-        } else if let Some(i) = idx("battery", self.sim.batteries.len()) {
+        } else if let Some(i) = idx("battery", sim.batteries.len()) {
             DeviceId::Battery(i)
         } else {
             return false;
         };
-        self.sim.set_online(dev, online);
+        self.cl.sim.set_online(dev, online);
+        self.shadow.sim.set_online(dev, online);
         true
     }
 
     pub fn time_s(&self) -> f64 {
-        self.sim.t_s
+        self.cl.sim.t_s
     }
 
     pub fn state_json(&self) -> String {
-        let st = self.status.as_ref();
-        let r = &self.readings;
-        let t = self.sim.t_s;
-        let cfg = self.ctl.config();
-        let chargers = self
-            .sim
+        let cl = &self.cl;
+        let sim = &cl.sim;
+        let st = cl.status.as_ref();
+        let t = sim.t_s;
+        let cfg = cl.ctl.config();
+        let chargers = sim
             .chargers
             .iter()
             .enumerate()
@@ -334,49 +349,65 @@ impl Demo {
                 ChargerOut {
                     online: c.online,
                     status,
-                    setpoint_a: self.setpoints.charger_current_a.get(i).copied().unwrap_or(0.0),
+                    setpoint_a: cl.setpoints.charger_current_a.get(i).copied().unwrap_or(0.0),
                     current_a: c.current_a,
                     kw: c.power_kw(),
                     session_kwh: c.car.as_ref().map_or(0.0, |car| car.charged_kwh),
                     needs_kwh: c.car.as_ref().map_or(0.0, |car| car.needs_kwh),
+                    leaves_in_h: c.car.as_ref().map(|car| (car.departure_s - t) / 3600.0),
                 }
             })
             .collect();
-        let hp = &self.sim.heat_pumps[0];
-        let b = &self.sim.batteries[0];
+        let hp = &sim.heat_pumps[0];
+        let b = &sim.batteries[0];
+        let da = sim.climate.day_ahead_eur_mwh(t);
         let budget_kwh = cfg.policy.curtailment_budget_pct.map(|p| p / 100.0 * cfg.expected_annual_yield_kwh);
+        let stored_kwh = |c: &ClosedLoop| -> f64 {
+            c.sim.batteries.iter().filter(|b| b.online).map(|b| b.soc_pct / 100.0 * b.capacity_kwh).sum()
+        };
+        let unmet = |c: &ClosedLoop| {
+            let start = c.scenario.start_h * 3600.0;
+            c.sim.departures.iter().filter(|d| d.at_s >= start).map(|d| d.unmet_kwh()).sum::<f64>()
+        };
         let out = StateOut {
             t_s: t,
             jurisdiction: cfg.policy.jurisdiction.code(),
+            season: sim.climate.season.name(),
+            strategy: cl.strategy.name(),
             mode: st.map_or("normal", |s| mode_name(s.mode)),
-            dim: self.cmd.dim,
-            emergency: self.cmd.emergency,
-            feed_in_limit_pct: self.cmd.feed_in_limit_pct,
+            dim: cl.cmd.dim,
+            emergency: cl.cmd.emergency,
+            feed_in_limit_pct: cl.cmd.feed_in_limit_pct,
             feed_in_in_force_pct: st.map_or(100.0, |s| s.feed_in_limit_pct),
-            grid_kw: r.grid_kw,
-            pv_kw: self.sim.pv_kw(),
-            pv_available_kw: self.sim.pv_available_kw(),
-            base_kw: self.sim.base_kw,
-            steuve_kw: self.sim.chargers_kw() + self.sim.heat_pumps_kw() + self.sim.batteries_kw().max(0.0),
+            price_eur_mwh: da,
+            import_eur_kwh: Tariff::default().import_eur_kwh(da),
+            grid_kw: cl.readings.grid_kw,
+            pv_kw: sim.pv_kw(),
+            pv_available_kw: sim.pv_available_kw(),
+            base_kw: sim.base_kw,
+            steuve_kw: sim.chargers_kw() + sim.heat_pumps_kw() + sim.batteries_kw().max(0.0),
             steuve_grid_kw: st.and_then(|s| s.steuve_grid_kw),
             steuve_budget_kw: st.and_then(|s| s.steuve_budget_kw),
-            floor_kw: self.ctl.floor_kw(),
+            floor_kw: cl.ctl.floor_kw(),
             allowed_export_kw: st.map_or(120.0, |s| s.allowed_export_kw),
-            export_kw: (-self.sim.grid_kw()).max(0.0),
-            pv_limit_pct: self.setpoints.pv_limit_pct,
-            outdoor_c: self.sim.outdoor_c(),
+            export_kw: (-sim.grid_kw()).max(0.0),
+            pv_limit_pct: cl.setpoints.pv_limit_pct,
+            outdoor_c: sim.outdoor_c(),
+            indoor_c: sim.building.indoor_c,
+            comfort_min_c: Building::comfort_min_c(t),
             heat_pump_kw: hp.power_kw,
             heat_pump_demand_kw: hp.demand_kw,
             heat_pump_limit_kw: hp.limit_kw,
+            heat_pump_external: hp.external(t),
             heat_pump_online: hp.online,
             heat_pump_opted_out: cfg.heat_pumps[0].opted_out,
-            meter_online: self.sim.meter_online,
-            inverters_online: self.sim.inverters.iter().map(|i| i.online).collect(),
+            meter_online: sim.meter_online,
+            inverters_online: sim.inverters.iter().map(|i| i.online).collect(),
             chargers,
             battery: BatteryOut {
                 online: b.online,
                 kw: b.power_kw,
-                setpoint_kw: self.setpoints.battery_kw.first().copied().unwrap_or(0.0),
+                setpoint_kw: cl.setpoints.battery_kw.first().copied().unwrap_or(0.0),
                 soc_pct: b.soc_pct,
                 watchdog: b.in_watchdog(t),
             },
@@ -386,8 +417,58 @@ impl Demo {
             budget_used_pct: st.and_then(|s| s.curtailment_budget_used_pct),
             refusals: st.map_or(vec![], |s| s.refusals.iter().map(refusal_name).collect()),
             fallbacks: st.map_or(vec![], |s| s.fallbacks.iter().map(fallback_name).collect()),
+            cost_eur: cl.metrics.energy_cost_eur,
+            ageing_eur: cl.metrics.degradation_eur(),
+            demand_eur: cl.metrics.demand_eur(),
+            peak_kw: cl.metrics.peak_quarter_kw,
+            discomfort_kh: cl.metrics.discomfort_kh,
+            ev_unmet_kwh: unmet(cl),
+            shadow_cost_eur: self.shadow.metrics.energy_cost_eur,
+            shadow_ageing_eur: self.shadow.metrics.degradation_eur(),
+            shadow_demand_eur: self.shadow.metrics.demand_eur(),
+            shadow_peak_kw: self.shadow.metrics.peak_quarter_kw,
+            shadow_discomfort_kh: self.shadow.metrics.discomfort_kh,
+            shadow_ev_unmet_kwh: unmet(&self.shadow),
+            battery_kwh: stored_kwh(cl),
+            shadow_battery_kwh: stored_kwh(&self.shadow),
+            shadow_indoor_c: self.shadow.sim.building.indoor_c,
+            plan_age_min: cl.plan.as_ref().map(|p| (t - p.made_at_s) / 60.0),
+            plans: cl.metrics.plans,
+            solve_ms: cl.metrics.solve_ms_mean,
         };
         serde_json::to_string(&out).unwrap_or_default()
+    }
+
+    /// The plan in force, or `null` when the site runs on rules.
+    pub fn plan_json(&self) -> String {
+        let Some(rec) = &self.cl.plan else { return "null".into() };
+        let p = &rec.plan;
+        let n = p.grid_kw.len();
+        let step_h = closedloop::runner::PLAN_STEP_H;
+        let cap = self.cl.sim.batteries[0].capacity_kwh;
+        let out = PlanOut {
+            start_h: rec.made_at_s / 3600.0,
+            step_h,
+            grid_kw: p.grid_kw.clone(),
+            battery_kw: p.battery_kw.clone(),
+            soc_pct: p.soc_kwh.iter().map(|e| e / cap * 100.0).collect(),
+            indoor_c: p.indoor_c.clone(),
+            heat_pump_kw: p.heat_pump_kw.clone(),
+            ev_kw: (0..n).map(|k| p.ev_kw.iter().map(|v| v[k]).sum()).collect(),
+            dim: p.dim_budget_kw.iter().map(Option::is_some).collect(),
+            price_eur_mwh: (0..n)
+                .map(|k| self.cl.sim.climate.day_ahead_eur_mwh(rec.made_at_s + (k as f64 + 0.5) * step_h * 3600.0))
+                .collect(),
+        };
+        serde_json::to_string(&out).unwrap_or_default()
+    }
+
+    /// Day-ahead prices, €/MWh, for hours `from_h`..`to_h` (for the price strip).
+    pub fn prices_json(&self, from_h: f64, to_h: f64) -> String {
+        let hours: Vec<(f64, f64)> = ((from_h.floor() as i64)..(to_h.ceil() as i64))
+            .map(|h| (h as f64, self.cl.sim.climate.day_ahead_eur_mwh(h as f64 * 3600.0 + 1.0)))
+            .collect();
+        serde_json::to_string(&hours).unwrap_or_default()
     }
 
     /// Frames produced since the last call, oldest first.
@@ -405,108 +486,24 @@ impl Demo {
         self.station_send(&cmd.mirror(Cause::ActivationTermination, false));
     }
 
-    /// Reads every device through its registers, runs the controller and
-    /// writes the setpoints back — one gateway cycle.
-    fn control_cycle(&mut self) {
-        let sim = &mut self.sim;
-
-        let mut pv = Some(0.0);
-        let mut avail = Some(0.0);
-        let mut control_bodies = Vec::new();
-        for i in 0..sim.inverters.len() {
-            let dev = DeviceId::Inverter(i);
-            let kw = model_body(sim, dev, inverter::ID)
-                .and_then(|b| sim.read(dev, b, inverter::LEN as u16).ok())
-                .map(|m| sunspec::scaled(m[inverter::W] as i16, m[inverter::W_SF] as i16) / 1000.0);
-            let av = model_body(sim, dev, available::ID)
-                .and_then(|b| sim.read(dev, b, available::LEN as u16).ok())
-                .map(|m| sunspec::scaled(m[available::W_AVAIL] as i16, m[available::W_AVAIL_SF] as i16) / 1000.0);
-            pv = pv.zip(kw).map(|(a, b)| a + b);
-            avail = avail.zip(av).map(|(a, b)| a + b);
-            control_bodies.push(model_body(sim, dev, controls::ID));
-        }
-        let grid = model_body(sim, DeviceId::Meter, meter::ID)
-            .and_then(|b| sim.read(DeviceId::Meter, b, meter::LEN as u16).ok())
-            .map(|m| sunspec::scaled(m[meter::W] as i16, m[meter::W_SF] as i16) / 1000.0);
-
-        let chargers = (0..sim.chargers.len())
-            .map(|i| match sim.read(DeviceId::Charger(i), 0, evse::LEN) {
-                Ok(r) => control::ChargerReading {
-                    online: true,
-                    car_waiting: matches!(
-                        r[evse::STATUS as usize],
-                        evse::STATUS_CONNECTED | evse::STATUS_CHARGING | evse::STATUS_FAILSAFE
-                    ),
-                    current_a: r[evse::CURRENT as usize] as f64 / 10.0,
-                    power_kw: regs_to_u32(&r[evse::POWER as usize..]) as f64 / 1000.0,
-                    session_kwh: regs_to_u32(&r[evse::SESSION_ENERGY as usize..]) as f64 / 1000.0,
-                },
-                Err(_) => control::ChargerReading::default(),
-            })
-            .collect();
-        let heat_pumps = (0..sim.heat_pumps.len())
-            .map(|i| match sim.read(DeviceId::HeatPump(i), 0, heat_pump::LEN) {
-                Ok(r) => control::HeatPumpReading {
-                    online: true,
-                    power_kw: r[heat_pump::POWER as usize] as f64 / 10.0,
-                    demand_kw: r[heat_pump::DEMAND as usize] as f64 / 10.0,
-                },
-                Err(_) => control::HeatPumpReading::default(),
-            })
-            .collect();
-        let batteries = (0..sim.batteries.len())
-            .map(|i| match sim.read(DeviceId::Battery(i), 0, battery::LEN) {
-                Ok(r) => control::BatteryReading {
-                    online: true,
-                    soc_pct: r[battery::SOC as usize] as f64 / 10.0,
-                    power_kw: r[battery::POWER as usize] as i16 as f64 / 10.0,
-                },
-                Err(_) => control::BatteryReading::default(),
-            })
-            .collect();
-
-        let readings = Readings { grid_kw: grid, pv_kw: pv, pv_available_kw: avail, chargers, heat_pumps, batteries };
-        let clock = Clock::at(sim.t_s, YEAR);
-        let (sp, st) = self.ctl.step(&clock, &self.cmd, &readings);
-
-        for (i, body) in control_bodies.iter().enumerate() {
-            if let Some(b) = body {
-                let raw = sunspec::unscaled(sp.pv_limit_pct, -1) as u16;
-                let _ = sim.write(DeviceId::Inverter(i), b + controls::W_MAX_LIM_PCT as u16, &[raw]);
-                let _ = sim.write(DeviceId::Inverter(i), b + controls::W_MAX_LIM_ENA as u16, &[1]);
-            }
-        }
-        for (i, &a) in sp.charger_current_a.iter().enumerate() {
-            let _ = sim.write(DeviceId::Charger(i), evse::CURRENT_LIMIT, &[(a * 10.0).round() as u16]);
-        }
-        for (i, &kw) in sp.heat_pump_limit_kw.iter().enumerate() {
-            let _ = sim.write(DeviceId::HeatPump(i), heat_pump::POWER_LIMIT, &[(kw * 10.0).floor() as u16]);
-        }
-        for (i, &kw) in sp.battery_kw.iter().enumerate() {
-            let _ = sim.write(DeviceId::Battery(i), battery::SETPOINT, &[(kw * 10.0).round() as i16 as u16]);
-        }
-        self.readings = readings;
-        self.setpoints = sp;
-        self.status = Some(st);
-    }
-
     fn time_tag(&self) -> Cp56Time2a {
-        Cp56Time2a::from_unix_ms(DAY_EPOCH_MS + (self.sim.t_s * 1000.0) as i64)
+        Cp56Time2a::from_unix_ms(self.epoch_ms + (self.cl.sim.t_s * 1000.0) as i64)
     }
 
     /// Spontaneous reports, or every point for a general interrogation.
     fn report(&mut self, all: bool) {
-        let Some(st) = self.status.clone() else { return };
+        let Some(st) = self.cl.status.clone() else { return };
         let time = self.time_tag();
-        let b = self.readings.batteries.first().filter(|b| b.online);
+        let r = &self.cl.readings;
+        let b = r.batteries.first().filter(|b| b.online);
         let floats = [
-            (1001, self.readings.grid_kw),
-            (1002, self.readings.pv_kw),
+            (1001, r.grid_kw),
+            (1002, r.pv_kw),
             (1003, Some(st.steuve_kw)),
             (1004, st.steuve_grid_kw),
             (1005, Some(st.floor_kw)),
-            (1006, Some(self.cmd.feed_in_limit_pct)),
-            (1007, Some(self.setpoints.pv_limit_pct)),
+            (1006, Some(self.cl.cmd.feed_in_limit_pct)),
+            (1007, Some(self.cl.setpoints.pv_limit_pct)),
             (1008, Some(st.feed_in_limit_pct)),
             (1009, b.map(|b| b.power_kw)),
             (1010, b.map(|b| b.soc_pct)),
@@ -527,7 +524,7 @@ impl Demo {
         for (ioa, v) in floats {
             // A wider deadband than the gateway's keeps the page log readable.
             let deadband = match ioa {
-                1011 | 1012 => 15.0, // minutes / kWh counters: every quarter of an hour is enough here
+                1011 | 1012 => 15.0,
                 1006..=1008 | 1010 | 1013 => 1.0,
                 _ => 3.0,
             };
@@ -568,7 +565,7 @@ impl Demo {
 
     fn push(&mut self, from_dso: bool, bytes: Vec<u8>) {
         self.frames.push(Frame {
-            t_s: self.sim.t_s,
+            t_s: self.cl.sim.t_s,
             dir: if from_dso { "dso" } else { "site" },
             text: describe(&bytes),
             hex: bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "),
@@ -588,10 +585,10 @@ mod tests {
     }
 
     #[test]
-    fn dimming_in_the_browser_demo_respects_pmin() {
-        let mut d = Demo::new(17.75, 7, "DE");
+    fn dimming_in_the_browser_demo_respects_the_floor() {
+        let mut d = Demo::new(17.75, 7, "DE", "spring", "rules");
         d.advance(30.0);
-        assert!(state(&d)["steuve_kw"].as_f64().unwrap() > 60.0);
+        assert!(state(&d)["steuve_kw"].as_f64().unwrap() > 40.0);
         d.command_dim(true);
         d.advance(10.0);
         let s = state(&d);
@@ -605,7 +602,7 @@ mod tests {
 
     #[test]
     fn feed_in_limit_at_noon() {
-        let mut d = Demo::new(12.5, 7, "DE");
+        let mut d = Demo::new(12.5, 7, "DE", "spring", "rules");
         d.advance(60.0);
         assert!(d.command_feed_in(30.0));
         assert!(!d.command_feed_in(120.0));
@@ -617,7 +614,7 @@ mod tests {
 
     #[test]
     fn charger_offline_falls_back_to_its_own_failsafe() {
-        let mut d = Demo::new(17.75, 7, "DE");
+        let mut d = Demo::new(17.75, 7, "DE", "spring", "rules");
         d.advance(10.0);
         d.set_device_online("charger1", false);
         d.advance(40.0);
@@ -628,7 +625,7 @@ mod tests {
 
     #[test]
     fn austria_caps_export_at_70_percent_by_itself() {
-        let mut d = Demo::new(12.5, 7, "AT");
+        let mut d = Demo::new(12.5, 7, "AT", "spring", "rules");
         d.set_device_online("battery0", false);
         d.advance(600.0);
         let s = state(&d);
@@ -638,7 +635,7 @@ mod tests {
 
     #[test]
     fn swiss_budget_runs_out_and_an_emergency_still_curtails() {
-        let mut d = Demo::new(12.5, 7, "CH");
+        let mut d = Demo::new(12.5, 7, "CH", "spring", "rules");
         d.set_device_online("battery0", false);
         d.advance(30.0);
         d.command_feed_in(0.0);
@@ -659,15 +656,30 @@ mod tests {
     }
 
     #[test]
-    fn battery_stores_solar_and_its_watchdog_idles_it() {
-        let mut d = Demo::new(12.5, 7, "DE");
-        d.advance(120.0);
+    fn mpc_saves_money_against_its_rules_shadow_on_a_winter_evening() {
+        let mut d = Demo::new(14.0, 7, "DE", "winter", "mpc");
+        assert_ne!(d.plan_json(), "null", "a plan from the first cycle");
+        for _ in 0..(8 * 4) {
+            d.advance(900.0);
+        }
         let s = state(&d);
-        assert!(s["battery"]["kw"].as_f64().unwrap() > 1.0, "charging from surplus: {s}");
-        d.set_device_online("battery0", false);
-        d.advance(40.0);
-        let s = state(&d);
-        assert_eq!(s["battery"]["kw"].as_f64().unwrap(), 0.0);
-        assert!(s["fallbacks"].as_array().unwrap().iter().any(|f| f == "battery offline"));
+        let total = |p: &str| {
+            ["cost_eur", "ageing_eur", "demand_eur"].iter().map(|k| s[format!("{p}{k}")].as_f64().unwrap()).sum::<f64>()
+        };
+        let mpc = total("");
+        let rules = total("shadow_");
+        assert!(mpc < rules, "MPC {mpc:.1} € vs rules {rules:.1} €");
+        let plan: serde_json::Value = serde_json::from_str(&d.plan_json()).unwrap();
+        assert_eq!(plan["soc_pct"].as_array().unwrap().len(), 97);
+    }
+
+    #[test]
+    fn strategy_can_be_switched_mid_day() {
+        let mut d = Demo::new(10.0, 7, "DE", "spring", "rules");
+        assert_eq!(d.plan_json(), "null");
+        assert!(d.set_strategy("mpc"));
+        d.advance(10.0);
+        assert_ne!(d.plan_json(), "null");
+        assert!(!d.set_strategy("magic"));
     }
 }

@@ -1,8 +1,9 @@
 //! Planning layer of the edge gateway: a model-predictive controller that
 //! schedules battery, EV charging and heat pump over the next hours as a
 //! convex quadratic program, with forecasts, day-ahead prices, battery
-//! ageing, comfort, departure deadlines, expected DSO dimming windows and
-//! forecast uncertainty (deterministic, chance-constrained or robust).
+//! ageing, a demand charge on the peak, comfort, departure deadlines,
+//! expected DSO dimming windows and forecast uncertainty (deterministic,
+//! chance-constrained or robust).
 //!
 //! The plan is *guidance*: the real-time controller in the `control` crate
 //! follows it only as far as the regulatory and safety rules allow, and falls
@@ -14,5 +15,6 @@ pub mod normal;
 mod qp;
 
 pub use model::{
-    BatteryModel, EvRequest, Forecast, HeatPumpModel, Plan, PlanError, PlanInput, Uncertainty, Weights, plan,
+    BatteryModel, DemandCharge, EvRequest, Forecast, HeatPumpModel, Plan, PlanError, PlanInput, Uncertainty, Weights,
+    plan,
 };

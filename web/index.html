@@ -49,8 +49,10 @@
 
   /* control strip */
   .controls { display: grid; grid-template-columns: 0.9fr 1.3fr 1fr 1.5fr; gap: 16px 22px; align-items: end; }
-  @media (max-width: 960px) { .controls { grid-template-columns: 1fr 1fr; } }
-  @media (max-width: 560px) { .controls { grid-template-columns: 1fr; } }
+  .controls .half-l { grid-column: 1 / 3; }
+  .controls .half-r { grid-column: 3 / 5; }
+  @media (max-width: 960px) { .controls { grid-template-columns: 1fr 1fr; } .controls .half-l, .controls .half-r { grid-column: 1 / -1; } }
+  @media (max-width: 560px) { .controls { grid-template-columns: 1fr; } .seg { flex-wrap: wrap; } .seg button { flex: 1 1 auto; } }
   .field { display: flex; flex-direction: column; gap: 6px; font-size: .86rem; font-weight: 600; min-width: 0; }
   .field small { font-weight: 400; color: var(--ink3); }
   .seg { display: flex; gap: 3px; background: var(--sunk); border-radius: 8px; padding: 3px; }
@@ -94,6 +96,21 @@
   .legend span { display: inline-flex; align-items: center; gap: 7px; }
   .legend i { width: 16px; height: 2px; display: inline-block; }
   .legend i.dash { background: repeating-linear-gradient(90deg, var(--ink) 0 4px, transparent 4px 7px); }
+  h2.sub { margin: 14px 0 4px; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  h2.sub .key { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: .8rem; color: var(--ink2); display: inline-flex; gap: 6px; align-items: center; }
+  h2.sub .key i { display: inline-block; width: 16px; height: 0; border-top: 2px solid; margin-left: 6px; }
+  h2.sub .key i.dashk { border-top-style: dashed; }
+  h2.sub .key i.bat { border-color: var(--s-bat); }
+  h2.sub .key i.hp { border-color: var(--s-steuve); }
+  h2.sub .key i.floor { border-color: var(--critical); border-top-width: 1px; }
+  #price-chart, #soc-chart, #temp-chart { width: 100%; height: auto; display: block; }
+  #price-chart text, #soc-chart text, #temp-chart text { font: 12px var(--sans); fill: var(--ink3); }
+  table.vs { margin-top: 8px; font-size: .84rem; width: 100%; }
+  table.vs td, table.vs th { padding: 4px 6px 4px 0; }
+  table.vs td:first-child { width: 42%; }
+  table.vs td.mono { white-space: nowrap; font-size: .8rem; text-align: right; }
+  table.vs th { text-align: right; }
+  .muted { color: var(--ink3); font-size: .8rem; }
   .tip { position: absolute; pointer-events: none; background: var(--ink); color: var(--surface); padding: 7px 10px; border-radius: 6px; font-size: .82rem; line-height: 1.45; white-space: nowrap; z-index: 5; display: none; }
   .tip b { font-family: var(--mono); font-weight: 500; }
 
@@ -144,8 +161,8 @@
 <div class="wrap">
   <header>
     <h1>Grid Edge Gateway</h1>
-    <p>A site controller in Rust that sits between a grid operator and a commercial prosumer site. It speaks IEC 60870-5-104 to the operator's control centre and SunSpec Modbus to the inverters, chargers, heat pump and battery, and in between it applies the country's rules: §14a EnWG in Germany, the ElWG feed-in cap in Austria, the 3% curtailment budget and flexibility contracts in Switzerland. What runs below is that code, compiled to WebAssembly.</p>
-    <div class="links"><a href="https://github.com/maycu-byte/grid-edge-gateway">Source code and README</a><a href="#how">How it works</a><a href="#countries">Country rules</a><a href="#points">IEC 104 point list</a></div>
+    <p>A site controller in Rust that sits between a grid operator and a commercial prosumer site. It speaks IEC 60870-5-104 to the operator's control centre and SunSpec Modbus to the inverters, chargers, heat pump and battery. A model-predictive planner schedules the site against real day-ahead prices; a real-time safety layer applies each country's rules — §14a EnWG in Germany, the ElWG feed-in cap in Austria, the 3% curtailment budget and flexibility contracts in Switzerland. What runs below is that code, compiled to WebAssembly.</p>
+    <div class="links"><a href="https://github.com/maycu-byte/grid-edge-gateway">Source code and README</a><a href="#how">How it works</a><a href="#planning">The MPC study</a><a href="#countries">Country rules</a><a href="#points">IEC 104 point list</a></div>
   </header>
   <noscript><p class="noscript">This demo needs JavaScript and WebAssembly.</p></noscript>
 
@@ -159,6 +176,20 @@
       </div>
       <small id="country-note"></small>
     </div>
+    <div class="field half-l">Day <small>real German day-ahead prices, bidding zone DE-LU (SMARD)</small>
+      <div class="seg" id="season-seg">
+        <button data-v="winter" aria-pressed="true">Winter · 20 Jan 2025</button>
+        <button data-v="spring" aria-pressed="false">Spring · 6 Apr 2025</button>
+      </div>
+    </div>
+    <div class="field half-r">Controller <small>switch any time; a rules-only copy runs alongside</small>
+      <div class="seg" id="strategy-seg">
+        <button data-v="rules" aria-pressed="false">Rules only</button>
+        <button data-v="mpc" aria-pressed="true">MPC planner</button>
+        <button data-v="mpc-cc" aria-pressed="false">MPC, chance-constrained</button>
+      </div>
+    </div>
+    <div class="field" style="grid-column: 1 / -1"><small id="strategy-note"></small></div>
     <div class="field">Reduce consumption <small id="dim-sub">C_SC_NA_1 · IOA 5001</small>
       <div class="seg" id="dim-seg">
         <button data-v="off" aria-pressed="true">Normal</button>
@@ -179,7 +210,7 @@
         <button data-v="on" class="dso" aria-pressed="false">Immediate threat</button>
       </div>
     </div>
-    <div class="field">Simulated day <small>spring day at a logistics depot</small>
+    <div class="field">Simulated time <small>a logistics depot, 06:00 to 06:00 next day</small>
       <div class="clock">
         <button class="play" id="play" aria-label="Pause">❚❚</button>
         <b id="clock">--:--</b>
@@ -192,15 +223,15 @@
     </div>
     <div class="field" style="grid-column: 1 / -1">Jump to a scene
       <div class="seg" id="scene-seg">
+        <button data-v="6">06:00 · the whole day and night</button>
         <button data-v="11.5">11:30 · solar peak, try a feed-in limit</button>
-        <button data-v="17.6">17:36 · vans plug in, try dimming</button>
-        <button data-v="6">06:00 · whole day</button>
+        <button data-v="16.25">16:15 · vans arrive, price peak, try dimming</button>
       </div>
     </div>
   </section>
 
   <section class="main">
-    <div class="panel chart">
+    <div class="panel chart" id="charts">
       <h2>Power at the depot, kW</h2>
       <div class="legend" id="legend">
         <span><i style="background:var(--s-grid)"></i>Grid connection (+ import, − export)</span>
@@ -210,10 +241,20 @@
         <span><i class="dash"></i>DSO limit in force</span>
       </div>
       <svg id="chart" viewBox="0 0 760 330" role="img" aria-label="Power over the simulated day"></svg>
+      <h2 class="sub">Day-ahead price, €/MWh <span class="key">winter peak 583 at 17:00 · spring low −115 at 14:00</span></h2>
+      <svg id="price-chart" viewBox="0 0 760 110" role="img" aria-label="Day-ahead price"></svg>
+      <h2 class="sub">Battery state of charge, % <span class="key"><i class="solid bat"></i>actual <i class="dashk bat"></i>plan</span></h2>
+      <svg id="soc-chart" viewBox="0 0 760 110" role="img" aria-label="Battery state of charge, actual and planned"></svg>
+      <h2 class="sub">Indoor temperature, °C <span class="key"><i class="solid hp"></i>actual <i class="dashk hp"></i>plan <i class="dashk floor"></i>comfort floor</span></h2>
+      <svg id="temp-chart" viewBox="0 0 760 110" role="img" aria-label="Indoor temperature, actual and planned, with the comfort floor"></svg>
       <div class="tip" id="tip"></div>
     </div>
     <div class="side">
       <div class="panel mode" id="mode"></div>
+      <div class="panel">
+        <h2>This site vs the same site on rules alone</h2>
+        <div id="versus"></div>
+      </div>
       <div class="panel">
         <h2>Consumption limit: controllable devices' grid draw</h2>
         <div class="gauge" id="gauge"><div class="track"><div class="fill"></div><div class="lim"></div></div><div class="labels"><span id="g-now">–</span><span id="g-lim">–</span></div></div>
@@ -262,10 +303,11 @@
         <text x="265" y="116" text-anchor="middle" class="small">TLS, client certs</text>
         <rect x="320" y="20" width="340" height="150" rx="10" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.5"/>
         <text x="490" y="46" text-anchor="middle" font-weight="600">grid-edge-gateway (Rust)</text>
-        <text x="340" y="76" class="small">iec104 — controlled station, sans-IO link layer</text>
-        <text x="340" y="100" class="small">control — DE/AT/CH rules, allocation, battery, ramps</text>
-        <text x="340" y="124" class="small">field — SunSpec discovery, watchdogs, reconnect</text>
-        <text x="340" y="148" class="small">api — JSON / WebSocket for this dashboard</text>
+        <text x="340" y="70" class="small">iec104 — controlled station, sans-IO link layer</text>
+        <text x="340" y="92" class="small">planner — MPC: 24 h convex QP every 15 min</text>
+        <text x="340" y="114" class="small">control — safety layer: DE/AT/CH rules, allocation</text>
+        <text x="340" y="136" class="small">field — SunSpec discovery, watchdogs, reconnect</text>
+        <text x="340" y="158" class="small">api — JSON / WebSocket for this dashboard</text>
         <line x1="662" y1="95" x2="768" y2="95" stroke="currentColor" stroke-width="2" marker-start="url(#ar)" marker-end="url(#ar)"/>
         <text x="715" y="82" text-anchor="middle" class="small">Modbus TCP</text>
         <text x="715" y="116" text-anchor="middle" class="small">SunSpec</text>
@@ -279,9 +321,28 @@
     </svg>
     <div class="cols" style="margin-top:14px">
       <div><h3>Towards the DSO</h3><p>The gateway is an IEC 60870-5-104 controlled station, the protocol German DSOs require for telecontrol of plants from 100 kW. Commands are confirmed (or refused with a negative confirmation), measurements go out spontaneously with time tags, and the link runs over TLS with client certificates in the spirit of IEC 62351-3. The protocol stack is written from scratch and tested against lib60870.</p></div>
-      <div><h3>The control rules</h3><p>During §14a dimming the controllable devices may draw at least Pmin,14a from the grid; the EMS decides how to split it. Here the heat pump keeps 40% of its rating, as many cars as fit get the 6 A minimum, least-charged first, and PV surplus is added on top. After the signal ends, power returns over 5 minutes instead of in one step.</p></div>
+      <div><h3>Two layers of control</h3><p>A planner (MPC) looks 24 hours ahead every 15 minutes and schedules battery, cars and heat pump against prices, the demand charge, departures, comfort and battery ageing. Underneath, a real-time safety layer runs every second and follows the plan only as far as the rules allow: the consumption floor, feed-in limits, the 6 A car minimum and departure deadlines never depend on the plan being right.</p></div>
       <div><h3>Towards the devices</h3><p>Inverters and meter are found by walking the SunSpec model chain. Inverter limits are written without a revert timeout, so they stay in force if the gateway dies; chargers get a failsafe current of 6 A, which alone is below 4.2 kW. DSO commands are persisted, so a dimming survives a restart.</p></div>
     </div>
+  </section>
+
+  <section class="panel" id="planning">
+    <h2>The planning layer · what the MPC adds, measured</h2>
+    <p>Each plan is a convex quadratic program over 96 quarter-hours: battery dynamics with losses and an ageing cost per kWh cycled, a first-order thermal model of the building, each car's energy request and departure time (as ISO 15118 passes them to the charger), the DSO's announced dimming window as a constraint, day-ahead prices, and a demand charge on the highest quarter-hour of import. It is solved by Clarabel, an interior-point solver written in Rust — in the gateway, in the study, and in this page. Forecast errors are handled where they matter: the battery keeps a reserve only in and just before an expected dimming, the one time a shortfall cannot be bought from the grid.</p>
+    <p style="margin-top:10px">A Monte Carlo study puts a number on it: the depot over 30 random-weather days each in spring and winter, on the real prices of those days, with the DSO dimming from 17:30 to 19:30 — the same code, run 720 times.</p>
+    <div class="scroll" style="margin-top:12px"><table>
+      <thead><tr><th>Per day</th><th>Spring · 6 Apr 2025</th><th>Winter · 20 Jan 2025</th></tr></thead>
+      <tbody>
+        <tr><td>Rules alone: energy, battery ageing and peak charge</td><td class="mono">126.6 €</td><td class="mono">357.9 €</td></tr>
+        <tr><td><b>MPC</b></td><td class="mono"><b>−25.6 ± 2.2 €</b> (−20%)</td><td class="mono"><b>−59.7 ± 2.4 €</b> (−17%)</td></tr>
+        <tr><td>Highest quarter-hour of import</td><td class="mono">89 → 34 kW</td><td class="mono">110 → 57 kW</td></tr>
+        <tr><td>MPC that ignores the demand charge</td><td class="mono">−15.6 €, peak up to 93 kW</td><td class="mono">−44.4 €, peak up to 118 kW</td></tr>
+        <tr><td>Chance-constrained or robust MPC</td><td class="mono">same as MPC</td><td class="mono">same as MPC</td></tr>
+        <tr><td>Cars that left without their energy</td><td class="mono">0</td><td class="mono">0</td></tr>
+      </tbody>
+    </table></div>
+    <p style="margin-top:10px">The value comes from prices, the peak and the building's thermal mass, not from hedging forecast errors. The real-time layer absorbs those errors within seconds, and §14a guarantees a floor. With the dimming moved to the afternoon, the chance-constrained reserve cost 5 € a day in spring and bought only a few seconds less above the floor. A plan that ignores the demand charge piles charging into the cheapest hours and raises the peak, and for a German commercial site that pays a <i>Leistungspreis</i> it can lose money.</p>
+    <p style="margin-top:10px"><a href="https://github.com/maycu-byte/grid-edge-gateway/blob/main/docs/mpc.md">The formulation, the design choices and the full study →</a></p>
   </section>
 
   <section class="panel" id="countries">

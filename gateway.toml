@@ -16,6 +16,8 @@ pv_ramp_pct_per_s = 0.17    # PV limit raised by at most ~10% of installed power
 import_target_kw = 0.0      # battery discharges to keep grid import at or below this
 margin_kw = 0.3             # headroom below every limit
 min_dwell_s = 300.0         # min time before a car is rotated in or out
+deadline_guard_s = 900.0    # a car with less slack than this before departure charges at full power
+surplus_hold_s = 30.0       # while dimmed, count on the lowest PV surplus of this many seconds
 control_period_ms = 1000
 stale_after_ms = 3000       # a device silent for this long counts as offline
 

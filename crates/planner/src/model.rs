@@ -9,13 +9,17 @@
 //! building    Tₖ₊₁ = a·Tₖ + b·COPₖ·hpₖ + dt/C·(gainsₖ + UA·T_outₖ),  a = 1 − dt·UA/C
 //! EV i        Σₖ ηᵢ·dt·evᵢₖ + uᵢ ≥ energy wanted before departure
 //! dimming     Σ evᵢₖ + hpₖ + cₖ − dₖ ≤ floor + max(0, PV_lowₖ − base_highₖ)   (when a dimming is expected)
+//! peak        g⁺ₖ ≤ P̂,   P̂ ≥ peak already billed this period          (with a demand charge on P̂)
 //! ```
 //!
 //! and the objective sums energy cost (import price ≥ export price keeps
 //! the split g⁺/g⁻ exact without binaries), battery degradation (throughput
 //! cost plus a penalty outside a comfortable state-of-charge band),
-//! penalties on discomfort and on energy a car leaves without, and a small
-//! quadratic term that smooths the battery schedule.
+//! penalties on discomfort and on energy a car leaves without, a demand
+//! charge on the highest quarter-hour of import, and a small quadratic term
+//! that smooths the battery schedule. The demand charge is the epigraph form
+//! of a max: only the part of the peak above what the billing period has
+//! already seen costs anything, so a peak paid for once is free to use again.
 //!
 //! Uncertainty (PV and base load forecast errors) enters where a shortfall
 //! would hurt: the PV that may be counted on during a dimming, and the lower
@@ -111,6 +115,16 @@ pub enum Uncertainty {
     Robust,
 }
 
+/// A demand charge (Leistungspreis): € per kW of the billing period's
+/// highest quarter-hour of import.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DemandCharge {
+    /// € per kW of peak, for the part of the period the plan stands for.
+    pub eur_per_kw: f64,
+    /// Highest quarter-hour mean import of the period so far, kW.
+    pub peak_so_far_kw: f64,
+}
+
 /// Preference weights of the objective, in € per unit.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Weights {
@@ -157,6 +171,7 @@ pub struct PlanInput {
     /// Forecast errors are accumulated over this window (and over a whole
     /// expected dimming, when buying is not an option).
     pub recovery_steps: usize,
+    pub demand_charge: Option<DemandCharge>,
     pub weights: Weights,
 }
 
@@ -182,6 +197,8 @@ pub struct Plan {
     pub indoor_c: Vec<f64>,
     /// Right-hand side of the dimming constraint, where one applies.
     pub dim_budget_kw: Vec<Option<f64>>,
+    /// The billed peak after this plan (with a demand charge), kW.
+    pub peak_kw: Option<f64>,
     /// Energy cost of the plan (import − export), €.
     pub energy_cost_eur: f64,
     pub objective: f64,
@@ -251,6 +268,11 @@ fn check(inp: &PlanInput) -> Result<(), PlanError> {
         && !(epsilon > 0.0 && epsilon < 0.5)
     {
         return bad("chance constraint epsilon must be in (0, 0.5)");
+    }
+    if let Some(d) = inp.demand_charge
+        && !(d.eur_per_kw >= 0.0 && d.eur_per_kw.is_finite() && d.peak_so_far_kw.is_finite())
+    {
+        return bad("demand charge must be finite and non-negative");
     }
     Ok(())
 }
@@ -459,6 +481,19 @@ pub fn plan(inp: &PlanInput) -> Result<Plan, PlanError> {
         unmet.push(u);
     }
 
+    // Demand charge on the highest quarter-hour: P̂ ≥ every import, and at
+    // least the peak the period has already billed (that part costs nothing
+    // more, so the constant is left out of the objective).
+    let peak = inp.demand_charge.map(|d| {
+        let floor = d.peak_so_far_kw.max(0.0);
+        let v = qp.var(floor, inp.import_limit_kw.max(floor));
+        qp.cost(v, d.eur_per_kw);
+        for &g in &gi {
+            qp.le(vec![(g, 1.0), (v, -1.0)], 0.0);
+        }
+        v
+    });
+
     // Energy left in the battery is worth something after the horizon.
     if let (Some(b), Some(&last)) = (&inp.battery, e.last()) {
         let mean = p_imp.iter().sum::<f64>() / n as f64;
@@ -492,6 +527,7 @@ pub fn plan(inp: &PlanInput) -> Result<Plan, PlanError> {
         heat_pump_kw: hp.iter().map(|&i| val(i)).collect(),
         indoor_c,
         dim_budget_kw: dim_budget,
+        peak_kw: peak.map(val),
         energy_cost_eur,
         objective: sol.objective,
         iterations: sol.iterations,

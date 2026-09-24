@@ -5,6 +5,8 @@
 //! all run exactly the same code. Country-specific limits come from a
 //! [`Policy`]; the controller itself is country-agnostic.
 
+use std::collections::VecDeque;
+
 use crate::accounting::{Accounting, Clock, Totals};
 use crate::policy::{ConsumptionRule, Policy};
 use crate::rules::{EV_MIN_CURRENT_A, SteuVE, three_phase_current_a, three_phase_kw};
@@ -74,6 +76,11 @@ pub struct SiteConfig {
     /// A car whose slack before departure (time left minus time to charge
     /// at full power) is below this charges at full power, plan or not.
     pub deadline_guard_s: f64,
+    /// While dimmed, the loads may count on the lowest PV surplus of this
+    /// many seconds: the budget follows a drop at once and a rise only once
+    /// it has lasted, so a cloud or a load step between two cycles does not
+    /// push the devices over the floor.
+    pub surplus_hold_s: f64,
     /// Battery self-consumption target: discharge to keep grid import at or
     /// below this (0 = maximise self-consumption).
     pub import_target_kw: f64,
@@ -100,8 +107,8 @@ impl SiteConfig {
         pos(self.pv_installed_kw, "pv_installed_kw")?;
         pos(self.connection_kw, "connection_kw")?;
         pos(self.pv_ramp_pct_per_s, "pv_ramp_pct_per_s")?;
-        if self.margin_kw < 0.0 || self.release_ramp_s < 0.0 || self.min_dwell_s < 0.0 {
-            return Err("margin_kw, release_ramp_s and min_dwell_s must be ≥ 0".into());
+        if self.margin_kw < 0.0 || self.release_ramp_s < 0.0 || self.min_dwell_s < 0.0 || self.surplus_hold_s < 0.0 {
+            return Err("margin_kw, release_ramp_s, min_dwell_s and surplus_hold_s must be ≥ 0".into());
         }
         for (i, c) in self.chargers.iter().enumerate() {
             if !(EV_MIN_CURRENT_A..=63.0).contains(&c.max_current_a) {
@@ -294,6 +301,8 @@ pub struct Controller {
     charger_switched_at: Vec<f64>,
     accounting: Accounting,
     guidance: Option<Guidance>,
+    /// PV surplus measured over the last `surplus_hold_s`: (time, kW).
+    surplus_seen: VecDeque<(f64, f64)>,
 }
 
 impl Controller {
@@ -315,6 +324,7 @@ impl Controller {
             charger_switched_at: vec![f64::NEG_INFINITY; n],
             accounting: Accounting::default(),
             guidance: None,
+            surplus_seen: VecDeque::new(),
         }
     }
 
@@ -422,6 +432,13 @@ impl Controller {
         // controllable device.
         let base_load = grid_kw.zip(pv_kw).map(|(g, pv)| g + pv - loads_kw - battery_kw);
         let pv_surplus = base_load.zip(pv_kw).map(|(b, pv)| (pv - b).max(0.0));
+        let hold = cfg.surplus_hold_s;
+        self.surplus_seen.retain(|&(t, _)| t <= t_s && t_s - t <= hold);
+        let held_surplus = pv_surplus.map(|s| {
+            self.surplus_seen.push_back((t_s, s));
+            self.surplus_seen.iter().map(|&(_, v)| v).fold(s, f64::min)
+        });
+        let cfg = &self.cfg;
 
         // --- consumption: the budget for the controllable loads ------------
         self.accounting.roll(clock);
@@ -441,7 +458,7 @@ impl Controller {
             mode = Mode::Dimmed;
             self.release = None;
             // Without a meter we cannot see PV surplus: grant only the floor.
-            self.floor_kw + pv_surplus.unwrap_or(0.0) - cfg.margin_kw
+            self.floor_kw + held_surplus.unwrap_or(0.0) - cfg.margin_kw
         } else {
             if self.was_dimmed {
                 self.release = Some((t_s, self.last_budget_kw));

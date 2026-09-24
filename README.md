@@ -1,10 +1,10 @@
 # Grid Edge Gateway
 
-**A site controller in Rust between a grid operator and a prosumer site in Germany, Austria or Switzerland: IEC 60870-5-104 towards the DSO, SunSpec Modbus towards PV, chargers, heat pump and battery, and each country's rules for dimming and feed-in limits in between.**
+**A site controller in Rust between a grid operator and a prosumer site in Germany, Austria or Switzerland: IEC 60870-5-104 towards the DSO, SunSpec Modbus towards PV, chargers, heat pump and battery, each country's rules for dimming and feed-in limits in between — and a model-predictive planner on top that schedules the site against real day-ahead prices, a demand charge, departure times and the building's thermal mass.**
 
-**[Open the live demo →](https://maycu-byte.github.io/grid-edge-gateway/)** The demo runs this code in your browser, compiled to WebAssembly. You play the grid operator: pick the country, send the commands and watch the site respond, frame by frame.
+**[Open the live demo →](https://maycu-byte.github.io/grid-edge-gateway/)** The demo runs this code in your browser, compiled to WebAssembly — the planner's quadratic program included. You play the grid operator: pick the country, the day and the controller, send the commands and watch the site respond, frame by frame, next to a copy of the same site running on rules alone.
 
-![A simulated day in Germany: feed-in limit at noon, §14a dimming in the evening, the battery covering both](docs/screenshot-day.png)
+![A winter day under the planner, on the real prices of 20 January 2025: the battery charges at noon and discharges into the evening price peak, the building is warmed before the §14a dimming, the overnight vans charge at a flat 42 kW. Against the same site on rules alone: 76 € less, and a peak of 42 kW instead of 110 kW](docs/screenshot-day.png)
 
 ## The problem
 
@@ -32,9 +32,10 @@ DSO control centre ──IEC 104 / TLS──► grid-edge-gateway ──Modbus T
 | | |
 |---|---|
 | **Consumption dimming** | **DE:** Pmin,14a exactly as in BK6-22-300 Anlage 1, 4.5.2: `max(0.4·ΣP_WP, 0.4·ΣP_Klima) + (n−1)·GZF·4.2 kW` with a heat pump above 11 kW, else `4.2 kW + (n−1)·GZF·4.2 kW`. For the depot (n = 6: four chargers, the battery, the heat pump; GZF 0.6): **18.2 kW**. **AT/CH:** the contract's minimum power and maximum minutes per day; devices whose owner opted out (CH) are never limited. In both cases the limit applies to power *drawn from the grid*, so PV surplus and battery discharge come on top. |
-| **Allocation** | Each heat pump first gets 40% of its rating. Then as many cars as fit get the IEC 61851 minimum of 6 A, least-charged first. What is left tops up the heat pump, then the cars in whole amps. Values are always rounded *down*: when the exact value is impossible, the regulation asks for the next lower one. Cars are only rotated after a 5-minute dwell time. |
+| **Allocation** | Each heat pump first gets 40% of its rating. Then as many cars as fit get the IEC 61851 minimum of 6 A: the car with the least slack before its departure first (time left minus time to charge at the car's own maximum current, as ISO 15118 reports it), then the least-charged. What is left tops up the heat pump, then the cars in whole amps. Values are always rounded *down*: when the exact value is impossible, the regulation asks for the next lower one. Cars are only rotated after a 5-minute dwell time. |
 | **Feed-in limits** | The DSO setpoint, capped by the country's standing limit (AT 70%, DE 60% where it applies), applied at the grid connection: PV may produce more while the site consumes or stores it. In CH the gateway counts curtailed energy against the 3% budget and refuses non-emergency curtailment beyond it. |
-| **Battery** | Stores what would be exported, so a feed-in limit is absorbed before any PV is curtailed; covers imports; while dimmed, discharges so the loads keep more of their budget. It never charges from the grid while dimmed. |
+| **Battery** | Stores what would be exported, so a feed-in limit is absorbed before any PV is curtailed; covers imports; while dimmed, discharges so the loads keep more of their budget. It never charges from the grid while dimmed. With a plan, it holds the planned grid exchange instead and so absorbs the forecast errors. |
+| **Following a plan** | The planner's schedule is *guidance*. Chargers are capped at the planned current, but a car whose slack drops under 15 minutes charges at full power whatever the plan says; the heat pump gets the planned power as an external request (SG Ready / EEBUS style) and keeps its own comfort guard; every hard rule above is applied after the plan. A property test feeds 10,000 random plans during a dimming and checks that the floor, the 0 or 6–32 A currents in whole amps and the heat-pump cap still hold. |
 | **Emergency** | A separate command for an immediate, serious threat (StromVG 17c 4b): overrides day limits, budgets and opt-outs. |
 | **Gradual release** | After a dimming ends, power returns linearly over 5 minutes (BK6-22-300, 4.3); a raised feed-in limit returns at about 10% of installed power per minute. |
 
@@ -68,7 +69,7 @@ DSO control centre ──IEC 104 / TLS──► grid-edge-gateway ──Modbus T
 
 Commands support direct execute and select-before-operate. Unknown addresses, types, causes and common addresses get the negative confirmations the standard defines (causes 44–47). Measurements are sent spontaneously outside a deadband and all together in a general interrogation.
 
-![Evening §14a dimming: four cars at 11–12 A, the battery discharging 16 kW, the heat pump at its minimum, and the IEC 104 reports](docs/screenshot-dimming.png)
+![§14a dimming at 18:18, at the price peak: the plan lets the overnight vans wait for cheaper hours and charges the van that leaves at 20:30 at 12 A; the heat pump is off because the building was warmed at noon; the battery discharges 16 kW; the IEC 104 reports go out](docs/screenshot-dimming.png)
 
 ## Robustness
 
@@ -85,23 +86,54 @@ Commands support direct execute and select-before-operate. Unknown addresses, ty
 | Configuration mistakes | Validated at start: unknown country, contract settings for DE, caps outside 0–100%, a failsafe current a car would not accept, and more. |
 | Someone else reaches port 2404 | With TLS on, the station accepts only client certificates signed by the DSO's CA (TLS 1.2/1.3, in the spirit of IEC 62351-3). |
 
+## The planning layer
+
+Rules keep the site legal; they do not make it cheap. On top of the real-time controller, a model-predictive planner solves the site's next 24 hours every 15 minutes (and whenever a car plugs in). It is a convex quadratic program over 96 quarter-hours with:
+
+- battery losses and ageing;
+- a thermal model of the building;
+- each car's energy request and departure time;
+- the DSO's announced dimming window;
+- real day-ahead prices;
+- a demand charge on the highest quarter-hour.
+
+It takes about 16 ms to solve, in Rust, in the gateway's crates and in the browser. The real-time layer follows the plan only as far as the rules allow.
+
+A Monte Carlo study compares it with plain rules on the depot: 30 random-weather days each in spring and winter, on real German day-ahead prices, with the DSO dimming from 17:30 to 19:30.
+
+| Per day | Spring (6 Apr 2025) | Winter (20 Jan 2025) |
+|---|---|---|
+| Rules: energy + battery ageing + peak charge | 126.6 € | 357.9 € |
+| MPC | **−25.6 ± 2.2 €** (−20%) | **−59.7 ± 2.4 €** (−17%) |
+| Highest quarter-hour of import | 89 → 34 kW | 110 → 57 kW |
+| MPC without the demand charge | −15.6 €, and a *higher* peak (93 kW) | −44.4 €, peak 118 kW |
+| Chance-constrained / robust MPC | same as MPC | same as MPC |
+
+In every run, every car left with the energy it asked for. The value comes from prices, the peak and the building's thermal mass, not from hedging forecast errors. The real-time layer absorbs those errors, and §14a guarantees a floor. With an afternoon dimming, the chance-constrained reserve cost 5 € a day in spring, and its only return was a few seconds less above the floor. The formulation, the study design, all the numbers and the limits are in **[docs/mpc.md](docs/mpc.md)**.
+
 ## How it is built
 
 | Crate | What it is |
 |---|---|
 | [`iec104`](crates/iec104) | IEC 60870-5-104 from scratch, with no dependencies: APDU framing, the ASDUs above plus clock sync and interrogation, CP56Time2a, and the controlled-station link layer (k/w windows, t1/t2/t3 timers, 15-bit sequence numbers) as a **sans-IO state machine**, so every timing rule is unit-tested without sleeping. An optional tokio driver runs it over TCP or TLS. |
-| [`control`](crates/control) | Country policies (`policy.rs`), running totals (`accounting.rs`) and the controller: pure functions and a small state machine. The same code runs in the gateway, in the tests and in the browser. |
-| [`devices`](crates/devices) | SunSpec register layouts (models 1, 103, 120, 123, 203 and a vendor model), typical wallbox and battery maps with watchdogs, and a deterministic physics simulation of the depot. |
+| [`control`](crates/control) | The real-time layer: country policies (`policy.rs`), running totals (`accounting.rs`) and the controller, pure functions and a small state machine. It takes a plan as guidance and enforces every rule after it. The same code runs in the gateway, in the tests and in the browser. |
+| [`planner`](crates/planner) | The planning layer: the site's next 24 hours as a convex quadratic program, solved with [Clarabel](https://github.com/oxfordcontrol/Clarabel.rs) (interior point, pure Rust, also in WebAssembly). Battery with losses and ageing, a first-order thermal model of the building, each car's request, the expected dimming window, a demand charge, and deterministic, chance-constrained or robust handling of forecast errors. See [docs/mpc.md](docs/mpc.md). |
+| [`closedloop`](crates/closedloop) | The simulated depot, the register adapter, the real-time controller and the planner with its forecaster, wired into one loop; and the [`study`](crates/closedloop/src/bin/study.rs) binary, a Monte Carlo comparison of the strategies. |
+| [`devices`](crates/devices) | SunSpec register layouts (models 1, 103, 120, 123, 203 and a vendor model), typical wallbox, heat-pump and battery maps with watchdogs, and a deterministic simulation of the depot over several days: PV under random cloudiness, the building's heat balance, battery losses, a van fleet with arrival and departure times, and real German day-ahead prices for a spring and a winter day. |
 | [`gateway`](crates/gateway) | The binary: one supervised task per Modbus device (SunSpec discovery by walking the model chain, reconnect, staleness detection), a 1 s control loop, the IEC 104 station, TLS (rustls), persistence and a read-only JSON/WebSocket API. |
 | [`site-sim`](crates/site-sim) | Every device of the depot as its own Modbus TCP server, with an HTTP endpoint to take devices offline. |
-| [`web-demo`](crates/web-demo) | The browser build: simulation + controller + IEC 104 encoder in WebAssembly. The controller reads and writes the simulated devices through their register maps, like the gateway does over Modbus TCP. |
+| [`web-demo`](crates/web-demo) | The browser build: the closed loop (planner included) + IEC 104 encoder in WebAssembly, with a rules-only copy of the site alongside for comparison. The controller reads and writes the simulated devices through their register maps, like the gateway does over Modbus TCP. |
 
 ## Testing
 
-- **79 Rust tests.** They cover:
+- **120 Rust tests.** They cover:
   - protocol frames checked against reference octets, every link-layer timer and window, sequence-number wrap-around;
   - the Pmin formula for several device mixes, allocation scenarios, each country's rules, day and year roll-over of the totals, the battery, plausibility checks, ramps and config validation;
-  - two property tests over 35,000 random site states. While dimmed, in every country and with a battery, the loads never get more than the floor + PV surplus + battery discharge. Every charger current is 0 or 6–32 A in whole amps.
+  - three property tests over 45,000 random site states and plans. While dimmed, in every country, with a battery and whatever the plan says, the loads never get more than the floor + PV surplus + battery discharge. Every charger current is 0 or 6–32 A in whole amps;
+  - the planner: price-driven battery use, charging before departure in the cheapest hours, pre-heating before a dimming, the dimming constraint, the demand charge, uncertainty reserves, a full day with four cars;
+  - how the real-time layer follows a plan: least slack first, the departure guard, the heat pump's request, a passing cloud during a dimming;
+  - the closed loop: every strategy through an evening dimming, and the planner saving money without raising the peak;
+  - the site simulation: register maps and watchdogs, the thermostat and an EMS taking it over (with the heat pump's own comfort guard), departures and unmet energy, day-to-day weather, prices in local time.
 - **17 interoperability tests** ([`interop/`](interop/test_interop.py)). They start the real simulator and gateway and drive them with [c104](https://github.com/Fraunhofer-FIT-DIEN/iec104-python), a Python binding of lib60870, as the DSO control centre. They cover:
   - general interrogation, §14a compliance within seconds, gradual release and negative confirmations;
   - meter loss, a battery gone silent, the emergency command and the link-loss policy;
@@ -130,6 +162,14 @@ python -m pytest -v interop
 
 To enable TLS, uncomment `[iec104.tls]` in `gateway.toml`. For the browser demo, run `web/build.sh`, which needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` 0.2.128.
 
+The planner study (a few minutes on a laptop):
+
+```sh
+cargo run --release -p closedloop --bin study -- --seeds 30                               # → docs/study
+cargo run --release -p closedloop --bin study -- --seeds 30 --dim 13-15 --out docs/study/afternoon
+cargo run --release -p closedloop --bin study -- trace winter 1 mpc trace.csv             # one run, every 5 min
+```
+
 ## Limits and honest notes
 
 - **Rules, not legal advice.** The country rules are taken from the texts linked above as of September 2026. The Austrian rules were read from the ministry's factsheet and secondary sources, because the official legal database blocks automated access; no Austrian consumption-side minimum was found. DSOs' technical connection rules add details not modelled here.
@@ -137,6 +177,8 @@ To enable TLS, uncomment `[iec104.tls]` in `gateway.toml`. For the browser demo,
 - **Signal path.** In German households the §14a signal usually travels through the smart meter gateway (CLS channel) to an FNN control box or via EEBUS. IEC 104 is the standard telecontrol path for larger plants (from 100 kW). This project uses IEC 104 for all commands to keep one DSO interface; the control logic does not depend on the transport.
 - **Protocol scope.** The IEC 104 stack implements the subset a controlled station of this kind needs, not the full companion standard (no file transfer, no redundancy groups). It is not certified; it is tested against lib60870.
 - **Clock.** Day and year boundaries for the running totals use UTC.
+- **The planner runs in the closed loop and in the browser, not yet in the gateway binary.** The gateway's real-time layer already takes guidance and reads what a plan needs from the devices (energy request and departure time from the chargers, temperatures from the heat pump). What it lacks are live inputs: day-ahead prices (e.g. the ENTSO-E transparency platform) and a PV forecast. The study's forecaster uses climatology and a nowcast instead.
+- **Planner study.** The simulated building is the planner's own model (same thermal parameters), so model mismatch comes only from the forecasts; a real building would need its parameters identified first, and the gains would shrink. The rules baseline is plain (a fixed thermostat schedule with no optimum start, cars at full power on arrival). See [docs/mpc.md](docs/mpc.md#limits) for the rest.
 - **TLS interop.** The c104 2.2.1 client cannot be used for TLS here: its bundled mbedtls 3.6 refuses to verify a server without a hostname (`-0x5D80`), and the released binding cannot set one yet. The TLS tests therefore send raw IEC 104 frames through Python's `ssl` (OpenSSL).
 
 ## License

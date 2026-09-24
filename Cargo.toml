@@ -11,3 +11,11 @@ repository = "https://github.com/maycu-byte/grid-edge-gateway"
 opt-level = "s"
 lto = true
 codegen-units = 1
+
+# The closed-loop tests build and solve a few hundred QPs: optimise the
+# planner and all dependencies (the solver above all) even in debug builds.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.planner]
+opt-level = 2

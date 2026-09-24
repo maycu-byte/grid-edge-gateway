@@ -48,6 +48,9 @@ pub struct Site {
     /// Cars with less slack than this before departure charge at full power.
     #[serde(default = "default_deadline_guard")]
     pub deadline_guard_s: f64,
+    /// While dimmed, count on the lowest PV surplus of this many seconds.
+    #[serde(default = "default_surplus_hold")]
+    pub surplus_hold_s: f64,
     #[serde(default)]
     pub import_target_kw: f64,
     pub control_period_ms: u64,
@@ -178,6 +181,9 @@ fn default_pv_ramp() -> f64 {
 fn default_deadline_guard() -> f64 {
     900.0
 }
+fn default_surplus_hold() -> f64 {
+    30.0
+}
 fn default_link_loss() -> LinkLossPolicy {
     LinkLossPolicy::Hold
 }
@@ -270,6 +276,7 @@ impl Config {
             margin_kw: self.site.margin_kw,
             min_dwell_s: self.site.min_dwell_s,
             deadline_guard_s: self.site.deadline_guard_s,
+            surplus_hold_s: self.site.surplus_hold_s,
             import_target_kw: self.site.import_target_kw,
         })
     }

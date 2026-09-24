@@ -128,11 +128,15 @@ pub struct Tariff {
     /// Grid fees, levies, electricity tax and supplier margin on top of the
     /// day-ahead price, €/kWh. Illustrative; real values depend on the DSO.
     pub import_adder_eur_kwh: f64,
+    /// Demand charge (Leistungspreis) on the highest quarter-hour of import
+    /// in the billing period, € per kW and year. Illustrative, of the order
+    /// of German tariffs for metered commercial customers.
+    pub demand_eur_per_kw_year: f64,
 }
 
 impl Default for Tariff {
     fn default() -> Self {
-        Tariff { import_adder_eur_kwh: 0.12 }
+        Tariff { import_adder_eur_kwh: 0.12, demand_eur_per_kw_year: 100.0 }
     }
 }
 
@@ -145,6 +149,12 @@ impl Tariff {
     /// (no payment in negative hours: EEG §51, Solarspitzengesetz 2025).
     pub fn export_eur_kwh(&self, day_ahead_eur_mwh: f64) -> f64 {
         day_ahead_eur_mwh.max(0.0) / 1000.0
+    }
+
+    /// The demand charge a stretch of `hours` carries on its own peak when
+    /// it stands for every day of the billing period (a representative day).
+    pub fn demand_eur_per_kw(&self, hours: f64) -> f64 {
+        self.demand_eur_per_kw_year * hours / 8760.0
     }
 }
 

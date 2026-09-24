@@ -31,6 +31,7 @@ fn input(n: usize, f: Forecast) -> PlanInput {
         heat_pump: None,
         uncertainty: Uncertainty::Deterministic,
         recovery_steps: 8,
+        demand_charge: None,
         weights: Weights { terminal_value_eur_per_kwh: Some(0.0), ..Weights::default() },
     }
 }
@@ -108,6 +109,39 @@ fn ev_gets_its_energy_before_departure_in_the_cheapest_hours() {
     assert!(cheap > 9.9, "charges in the cheap hour: {:?}", p.ev_kw[0]);
     assert!(p.ev_kw[0][12..].iter().all(|&x| x < 1e-4), "nothing after departure");
     assert!(p.ev_unmet_kwh[0] < 1e-4);
+}
+
+#[test]
+fn a_demand_charge_spreads_charging_instead_of_raising_the_peak() {
+    // Two cars, one cheap hour. Without a demand charge both charge in that
+    // hour at full power; with one, the charge-at-the-peak trade-off
+    // (0.5 €/kW against 0.10 €/kWh of price spread) flattens the schedule.
+    let n = 32; // 8 h
+    let prices: Vec<f64> = (0..n).map(|k| if (8..12).contains(&k) { 0.10 } else { 0.20 }).collect();
+    let mut inp = input(n, forecast(n, 0.0, 10.0, prices));
+    let car = EvRequest { remaining_kwh: 20.0, max_kw: 22.0, departure_h: Some(7.0), efficiency: 1.0, dimmable: true };
+    inp.evs = vec![car.clone(), car];
+    let max = |p: &Plan| p.grid_kw.iter().copied().fold(0.0, f64::max);
+    let free = plan(&inp).unwrap();
+    assert!(max(&free) > 45.0, "all in the cheap hour: {:?}", free.grid_kw);
+
+    inp.demand_charge = Some(DemandCharge { eur_per_kw: 0.5, peak_so_far_kw: 0.0 });
+    let flat = plan(&inp).unwrap();
+    // 40 kWh over the 7 h before departure: 10 kW base + 40/7 kW
+    assert!(close(max(&flat), 10.0 + 40.0 / 7.0, 0.05), "{:?}", flat.grid_kw);
+    assert!(close(flat.peak_kw.unwrap(), max(&flat), 1e-3));
+    assert!(flat.energy_cost_eur > free.energy_cost_eur + 1.0);
+    assert!(flat.ev_unmet_kwh.iter().all(|&u| u < 1e-3));
+
+    // A peak the billing period has already paid for is free to use again.
+    inp.demand_charge = Some(DemandCharge { eur_per_kw: 0.5, peak_so_far_kw: max(&free) });
+    let paid = plan(&inp).unwrap();
+    assert!(
+        close(paid.energy_cost_eur, free.energy_cost_eur, 0.01),
+        "{} vs {}",
+        paid.energy_cost_eur,
+        free.energy_cost_eur
+    );
 }
 
 #[test]
@@ -246,6 +280,14 @@ fn a_full_day_with_four_cars_solves_quickly() {
     assert!(p.ev_unmet_kwh.iter().all(|&u| u < 1e-3), "{:?}", p.ev_unmet_kwh);
     assert!(p.iterations < 100, "{} iterations", p.iterations);
     eprintln!("96-step plan: {:.1} ms, {} iterations", p.solve_ms, p.iterations);
+
+    inp.demand_charge = Some(DemandCharge { eur_per_kw: 0.27, peak_so_far_kw: 30.0 });
+    let q = plan(&inp).unwrap();
+    assert!(q.ev_unmet_kwh.iter().all(|&u| u < 1e-3), "{:?}", q.ev_unmet_kwh);
+    assert!(q.iterations < 100, "{} iterations", q.iterations);
+    let max = |p: &Plan| p.grid_kw.iter().copied().fold(0.0, f64::max);
+    assert!(max(&q) < max(&p), "the demand charge lowers the peak: {} vs {}", max(&q), max(&p));
+    eprintln!("with a demand charge: {:.1} ms, {} iterations", q.solve_ms, q.iterations);
 }
 
 #[test]

@@ -22,6 +22,7 @@ fn depot() -> SiteConfig {
         margin_kw: 0.3,
         min_dwell_s: 300.0,
         deadline_guard_s: 900.0,
+        surplus_hold_s: 30.0,
         import_target_kw: 0.0,
     }
 }
