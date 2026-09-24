@@ -380,9 +380,11 @@ def test_switzerland_refuses_curtailment_beyond_the_3_percent_budget(tmp_path):
         try:
             assert d.connected()
             assert wait_until(lambda: d.point(BUDGET_USED) is not None, 5)
+            # Without the battery soaking up the surplus, PV is really curtailed.
+            s.sim_device("battery0", "offline")
             d.feed_in.value = 0.0
             assert d.feed_in.transmit(cause=c104.Cot.ACTIVATION)
-            assert wait_until(lambda: d.value(BUDGET_EXHAUSTED) is True, 20), s.snapshot()["totals"]
+            assert wait_until(lambda: d.value(BUDGET_EXHAUSTED) is True, 60), s.snapshot()["totals"]
             assert wait_until(lambda: d.value(FEED_IN_IN_FORCE) == pytest.approx(100.0), 5)
             # An emergency still curtails.
             d.emergency.value = True

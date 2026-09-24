@@ -436,7 +436,16 @@ impl Controller {
         let allowed_export_kw = cfg.pv_installed_kw * feed_in_pct / 100.0;
 
         // --- battery --------------------------------------------------------
-        let battery_sp = self.plan_batteries(r, grid_kw, battery_kw, dim || mode == Mode::Releasing, base_load, pv_kw);
+        let battery_sp = self.plan_batteries(
+            r,
+            grid_kw,
+            battery_kw,
+            dim || mode == Mode::Releasing,
+            base_load,
+            pv_kw,
+            loads_kw,
+            feed_in_pct < 100.0,
+        );
         let battery_discharge: f64 = battery_sp.iter().map(|&p| (-p).max(0.0)).sum();
         let battery_charge: f64 = battery_sp.iter().map(|&p| p.max(0.0)).sum();
 
@@ -499,6 +508,12 @@ impl Controller {
     ///   soaks up a feed-in limit before any PV is curtailed.
     /// * While dimmed or releasing: never charge from the grid; discharge to
     ///   cover the site's import so the loads keep more of their budget.
+    ///
+    /// The balance uses the PV the sun *allows* where the inverters report
+    /// it. With measured PV only, a curtailment would look like a deficit:
+    /// the battery would discharge, the controller would curtail PV further
+    /// to hold the export limit, and the two would chase each other down.
+    #[allow(clippy::too_many_arguments)]
     fn plan_batteries(
         &self,
         r: &Readings,
@@ -507,21 +522,31 @@ impl Controller {
         constrained: bool,
         base_load: Option<f64>,
         pv_kw: Option<f64>,
+        loads_kw: f64,
+        feed_limited: bool,
     ) -> Vec<f64> {
         let cfg = &self.cfg;
         // Grid power as it would be with the batteries idle.
         let Some(grid_idle) = grid_kw.map(|g| g - battery_now_kw) else {
             return vec![0.0; cfg.batteries.len()]; // blind: hold still
         };
+        let pv_ref = r.pv_available_kw.or(pv_kw);
         let mut want = if constrained {
             // Import the site would have while dimmed ≈ base load − PV + a
             // floor's worth of loads; cover as much as the battery can.
-            let base_minus_pv = base_load.zip(pv_kw).map_or(0.0, |(b, pv)| b - pv);
+            let base_minus_pv = base_load.zip(pv_ref).map_or(0.0, |(b, pv)| b - pv);
             -(base_minus_pv + self.floor_kw).max(0.0)
-        } else if grid_idle < 0.0 {
-            -grid_idle // export → charge
         } else {
-            -(grid_idle - cfg.import_target_kw).max(0.0) // import → discharge
+            // + import / − export with the batteries idle and PV unconstrained.
+            let unconstrained = base_load.zip(r.pv_available_kw).map(|(b, av)| b + loads_kw - av);
+            let net = unconstrained.unwrap_or(grid_idle);
+            if net < 0.0 {
+                -net // surplus → charge
+            } else if feed_limited && unconstrained.is_none() {
+                0.0 // cannot tell a real deficit from our own curtailment
+            } else {
+                -(net - cfg.import_target_kw).max(0.0) // deficit → discharge
+            }
         };
         cfg.batteries
             .iter()

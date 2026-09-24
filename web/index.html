@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Grid Edge Gateway</title>
-<meta name="description" content="A Rust site controller between a German grid operator and a prosumer site: IEC 60870-5-104 towards the DSO, SunSpec Modbus towards the devices, §14a EnWG dimming and feed-in limits in between — running live in your browser as WebAssembly.">
+<meta name="description" content="A Rust site controller between a grid operator and a prosumer site in Germany, Austria or Switzerland: IEC 60870-5-104 towards the DSO, SunSpec Modbus towards PV, chargers, heat pump and battery, each country's dimming and feed-in rules in between — running live in your browser as WebAssembly.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M9 1 3 9h4l-1 6 6-8H8z%22 fill=%22%232a78d6%22/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -13,7 +13,7 @@
     color-scheme: light;
     --ground: #f4f5f3; --surface: #fcfcfb; --sunk: #ecede9; --hair: #d9dad4;
     --ink: #0f1311; --ink2: #4d524f; --ink3: #7c817d;
-    --s-grid: #2a78d6; --s-pv: #eb6834; --s-steuve: #1baf7a;
+    --s-grid: #2a78d6; --s-pv: #eb6834; --s-steuve: #1baf7a; --s-bat: #eda100;
     --good: #0c7a0c; --warn: #b36b00; --critical: #d03b3b; --accent: #2a78d6;
     --dso: #4a3aa7;
     --sans: "Public Sans", system-ui, "Segoe UI", sans-serif; --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
@@ -23,7 +23,7 @@
       color-scheme: dark;
       --ground: #111312; --surface: #1a1c1b; --sunk: #232625; --hair: #313533;
       --ink: #f1f3f1; --ink2: #c2c7c3; --ink3: #8e948f;
-      --s-grid: #3987e5; --s-pv: #d95926; --s-steuve: #199e70;
+      --s-grid: #3987e5; --s-pv: #d95926; --s-steuve: #199e70; --s-bat: #c98500;
       --good: #3fbf3f; --warn: #e0a030; --critical: #ef6a6a; --accent: #3987e5; --dso: #9085e9;
     }
   }
@@ -31,7 +31,7 @@
     color-scheme: dark;
     --ground: #111312; --surface: #1a1c1b; --sunk: #232625; --hair: #313533;
     --ink: #f1f3f1; --ink2: #c2c7c3; --ink3: #8e948f;
-    --s-grid: #3987e5; --s-pv: #d95926; --s-steuve: #199e70;
+    --s-grid: #3987e5; --s-pv: #d95926; --s-steuve: #199e70; --s-bat: #c98500;
     --good: #3fbf3f; --warn: #e0a030; --critical: #ef6a6a; --accent: #3987e5; --dso: #9085e9;
   }
   * { box-sizing: border-box; }
@@ -48,7 +48,7 @@
   .mono { font-family: var(--mono); }
 
   /* control strip */
-  .controls { display: grid; grid-template-columns: 1.1fr 1.3fr 1.5fr; gap: 16px 22px; align-items: end; }
+  .controls { display: grid; grid-template-columns: 0.9fr 1.3fr 1fr 1.5fr; gap: 16px 22px; align-items: end; }
   @media (max-width: 960px) { .controls { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 560px) { .controls { grid-template-columns: 1fr; } }
   .field { display: flex; flex-direction: column; gap: 6px; font-size: .86rem; font-weight: 600; min-width: 0; }
@@ -98,8 +98,9 @@
   .tip b { font-family: var(--mono); font-weight: 500; }
 
   /* devices */
-  .devices { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
-  @media (max-width: 960px) { .devices { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .devices { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 1100px) { .devices { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 640px) { .devices { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .dev { background: var(--sunk); border-radius: 10px; padding: 12px 13px; font-size: .86rem; display: flex; flex-direction: column; gap: 6px; }
   .dev header { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
   .dev header b { font-size: .92rem; }
@@ -143,17 +144,25 @@
 <div class="wrap">
   <header>
     <h1>Grid Edge Gateway</h1>
-    <p>A site controller in Rust that sits between a German grid operator and a commercial prosumer site. It speaks IEC 60870-5-104 to the operator's control centre and SunSpec Modbus to the inverters, chargers and heat pump, and in between it enforces §14a EnWG dimming and feed-in limits. What runs below is that code, compiled to WebAssembly.</p>
-    <div class="links"><a href="https://github.com/maycu-byte/grid-edge-gateway">Source code and README</a><a href="#how">How it works</a><a href="#points">IEC 104 point list</a></div>
+    <p>A site controller in Rust that sits between a grid operator and a commercial prosumer site. It speaks IEC 60870-5-104 to the operator's control centre and SunSpec Modbus to the inverters, chargers, heat pump and battery, and in between it applies the country's rules: §14a EnWG in Germany, the ElWG feed-in cap in Austria, the 3% curtailment budget and flexibility contracts in Switzerland. What runs below is that code, compiled to WebAssembly.</p>
+    <div class="links"><a href="https://github.com/maycu-byte/grid-edge-gateway">Source code and README</a><a href="#how">How it works</a><a href="#countries">Country rules</a><a href="#points">IEC 104 point list</a></div>
   </header>
   <noscript><p class="noscript">This demo needs JavaScript and WebAssembly.</p></noscript>
 
   <section class="panel controls" aria-label="DSO commands and simulation">
     <div class="dsobar"><span class="tag">DSO control centre</span><span>You are the grid operator. Every button sends a real IEC 104 command to the site; the frames appear in the log below.</span></div>
-    <div class="field">§14a EnWG grid-oriented control <small>C_SC_NA_1 · IOA 5001</small>
+    <div class="field" style="grid-column: 1 / -1">Rules the site runs under
+      <div class="seg" id="country-seg">
+        <button data-v="DE" aria-pressed="true">Germany · §14a EnWG</button>
+        <button data-v="AT" aria-pressed="false">Austria · ElWG</button>
+        <button data-v="CH" aria-pressed="false">Switzerland · StromVG</button>
+      </div>
+      <small id="country-note"></small>
+    </div>
+    <div class="field">Reduce consumption <small id="dim-sub">C_SC_NA_1 · IOA 5001</small>
       <div class="seg" id="dim-seg">
         <button data-v="off" aria-pressed="true">Normal</button>
-        <button data-v="on" class="dso" aria-pressed="false">Dim to Pmin</button>
+        <button data-v="on" class="dso" aria-pressed="false">Dim</button>
       </div>
     </div>
     <div class="field">Feed-in limit <small>C_SE_NC_1 · IOA 5002 · % of 120 kWp</small>
@@ -162,6 +171,12 @@
         <button data-v="60" class="dso" aria-pressed="false">60%</button>
         <button data-v="30" class="dso" aria-pressed="false">30%</button>
         <button data-v="0" class="dso" aria-pressed="false">0%</button>
+      </div>
+    </div>
+    <div class="field">Emergency <small>C_SC_NA_1 · IOA 5003 · overrides day limits, budgets, opt-outs</small>
+      <div class="seg" id="emergency-seg">
+        <button data-v="off" aria-pressed="true">Off</button>
+        <button data-v="on" class="dso" aria-pressed="false">Immediate threat</button>
       </div>
     </div>
     <div class="field">Simulated day <small>spring day at a logistics depot</small>
@@ -178,7 +193,7 @@
     <div class="field" style="grid-column: 1 / -1">Jump to a scene
       <div class="seg" id="scene-seg">
         <button data-v="11.5">11:30 · solar peak, try a feed-in limit</button>
-        <button data-v="17.6">17:36 · vans plug in, try §14a dimming</button>
+        <button data-v="17.6">17:36 · vans plug in, try dimming</button>
         <button data-v="6">06:00 · whole day</button>
       </div>
     </div>
@@ -191,6 +206,7 @@
         <span><i style="background:var(--s-grid)"></i>Grid connection (+ import, − export)</span>
         <span><i style="background:var(--s-pv)"></i>PV output</span>
         <span><i style="background:var(--s-steuve)"></i>Chargers + heat pump</span>
+        <span><i style="background:var(--s-bat)"></i>Battery (+ charging)</span>
         <span><i class="dash"></i>DSO limit in force</span>
       </div>
       <svg id="chart" viewBox="0 0 760 330" role="img" aria-label="Power over the simulated day"></svg>
@@ -199,9 +215,13 @@
     <div class="side">
       <div class="panel mode" id="mode"></div>
       <div class="panel">
-        <h2>§14a: steuVE power drawn from the grid</h2>
+        <h2>Consumption limit: controllable devices' grid draw</h2>
         <div class="gauge" id="gauge"><div class="track"><div class="fill"></div><div class="lim"></div></div><div class="labels"><span id="g-now">–</span><span id="g-lim">–</span></div></div>
-        <p style="font-size:.84rem;margin-top:8px">Pmin,14a = 0.4 × 14 kW heat pump + 4 × 0.65 × 4.2 kW = <b class="mono">16.52 kW</b> (BNetzA BK6-22-300). PV surplus may be used on top.</p>
+        <p style="font-size:.84rem;margin-top:8px" id="floor-text"></p>
+      </div>
+      <div class="panel" id="budget" hidden>
+        <h2>Free curtailment budget (CH, 3% of yearly PV)</h2>
+        <div class="gauge"><div class="track"><div class="fill"></div></div><div class="labels"><span id="b-now">–</span><span id="b-lim">–</span></div></div>
       </div>
       <div class="stats" id="stats"></div>
       <div class="panel">
@@ -211,8 +231,9 @@
           <button data-d="charger1" aria-pressed="false">Charger 2 offline</button>
           <button data-d="heatpump0" aria-pressed="false">Heat pump offline</button>
           <button data-d="inverter0" aria-pressed="false">Inverter 1 offline</button>
+          <button data-d="battery0" aria-pressed="false">Battery offline</button>
         </div>
-        <p style="font-size:.84rem;margin-top:8px">The device stops answering Modbus. Watch the fallbacks: a charger drops to its own 6 A failsafe after 30 s, and without the meter the budget shrinks to Pmin.</p>
+        <p style="font-size:.84rem;margin-top:8px">The device stops answering Modbus. Watch the fallbacks: a charger drops to its own 6 A failsafe and the battery goes idle after 30 s; without the meter the budget shrinks to the floor.</p>
       </div>
     </div>
   </section>
@@ -242,7 +263,7 @@
         <rect x="320" y="20" width="340" height="150" rx="10" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.5"/>
         <text x="490" y="46" text-anchor="middle" font-weight="600">grid-edge-gateway (Rust)</text>
         <text x="340" y="76" class="small">iec104 — controlled station, sans-IO link layer</text>
-        <text x="340" y="100" class="small">control — §14a Pmin, allocation, feed-in limit, ramp</text>
+        <text x="340" y="100" class="small">control — DE/AT/CH rules, allocation, battery, ramps</text>
         <text x="340" y="124" class="small">field — SunSpec discovery, watchdogs, reconnect</text>
         <text x="340" y="148" class="small">api — JSON / WebSocket for this dashboard</text>
         <line x1="662" y1="95" x2="768" y2="95" stroke="currentColor" stroke-width="2" marker-start="url(#ar)" marker-end="url(#ar)"/>
@@ -253,7 +274,7 @@
         <text x="790" y="76" class="small">2 × 60 kW PV inverters</text>
         <text x="790" y="100" class="small">grid meter (SunSpec 203)</text>
         <text x="790" y="124" class="small">4 × 22 kW chargers</text>
-        <text x="790" y="148" class="small">14 kW heat pump</text>
+        <text x="790" y="148" class="small">heat pump · 100 kWh battery</text>
       </g>
     </svg>
     <div class="cols" style="margin-top:14px">
@@ -263,30 +284,52 @@
     </div>
   </section>
 
+  <section class="panel" id="countries">
+    <h2>Country rules · one controller, three rule sets</h2>
+    <div class="scroll"><table>
+      <thead><tr><th></th><th>Consumption</th><th>Feed-in</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr><td><b>DE</b></td><td>§14a EnWG: the DSO may dim heat pumps, chargers and batteries, but must leave Pmin,14a (4.2 kW per device, simultaneity factor for several behind an EMS)</td><td>DSO setpoints for plants over 100 kW; new systems without smart meter capped at 60% (Solarspitzengesetz 2025)</td><td>BNetzA BK6-22-300, Anlage 1</td></tr>
+        <tr><td><b>AT</b></td><td>No statutory minimum like §14a was found in the sources checked; modelled as a flexibility contract (minimum power, minutes per day)</td><td>Spitzenkappung: the DSO may cap feed-in of new or extended PV at up to 70% of module peak power; a dynamic version is planned for 2028</td><td>ElWG, BGBl. I 91/2025; BMWET factsheet</td></tr>
+        <tr><td><b>CH</b></td><td>Flexibility is used by contract, with pay; the owner may forbid uses that existed before 2026</td><td>Guaranteed, unpaid curtailment of at most 3% of the yearly energy at the connection point; unlimited in an immediate, serious threat</td><td>StromVG Art. 17c; StromVV Art. 19b–19d (in force 1 Jan 2026)</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
   <section class="panel" id="points">
     <h2>IEC 104 point list · common address 1</h2>
     <div class="scroll"><table>
       <thead><tr><th>IOA</th><th>Type</th><th>Direction</th><th>Meaning</th></tr></thead>
       <tbody>
-        <tr><td class="mono">5001</td><td class="mono">C_SC_NA_1</td><td>DSO → site</td><td>§14a dimming ON / OFF</td></tr>
+        <tr><td class="mono">5001</td><td class="mono">C_SC_NA_1</td><td>DSO → site</td><td>Reduce consumption ON / OFF (§14a in DE, contract in AT/CH)</td></tr>
         <tr><td class="mono">5002</td><td class="mono">C_SE_NC_1</td><td>DSO → site</td><td>Feed-in limit, % of installed PV (0–100; other values are refused)</td></tr>
+        <tr><td class="mono">5003</td><td class="mono">C_SC_NA_1</td><td>DSO → site</td><td>Emergency ON / OFF: overrides day limits, budgets and opt-outs</td></tr>
         <tr><td class="mono">1001</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Active power at the grid connection, kW (+ import)</td></tr>
         <tr><td class="mono">1002</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>PV active power, kW</td></tr>
         <tr><td class="mono">1003</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Controllable devices (steuVE), kW</td></tr>
         <tr><td class="mono">1004</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>steuVE power drawn from the grid, kW — the quantity §14a limits</td></tr>
-        <tr><td class="mono">1005</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Pmin,14a of this site, kW</td></tr>
+        <tr><td class="mono">1005</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Consumption floor while dimmed, kW (Pmin,14a in DE)</td></tr>
         <tr><td class="mono">1006</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Feed-in limit in force, % (feedback of 5002)</td></tr>
         <tr><td class="mono">1007</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>PV limit sent to the inverters, %</td></tr>
-        <tr><td class="mono">2001</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>§14a dimming active (feedback of 5001)</td></tr>
+        <tr><td class="mono">1008</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Feed-in limit in force after country rules, %</td></tr>
+        <tr><td class="mono">1009</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Battery power, kW (+ charging)</td></tr>
+        <tr><td class="mono">1010</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Battery state of charge, %</td></tr>
+        <tr><td class="mono">1011</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Consumption dimmed today, minutes</td></tr>
+        <tr><td class="mono">1012</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>PV energy curtailed this year, kWh</td></tr>
+        <tr><td class="mono">1013</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Free curtailment budget used, % (CH)</td></tr>
+        <tr><td class="mono">2001</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Consumption dimming active (feedback of 5001)</td></tr>
         <tr><td class="mono">2002</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Gradual release in progress</td></tr>
         <tr><td class="mono">2003</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Meter fallback (grid measurement lost)</td></tr>
         <tr><td class="mono">2004</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Field device fault</td></tr>
+        <tr><td class="mono">2005</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Emergency active (feedback of 5003)</td></tr>
+        <tr><td class="mono">2006</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Contract day limit reached, dimming refused</td></tr>
+        <tr><td class="mono">2007</td><td class="mono">M_SP_TB_1</td><td>site → DSO</td><td>Curtailment budget used up</td></tr>
       </tbody>
     </table></div>
   </section>
 
   <footer>
-    Simulated site, synthetic data: 120 kWp rooftop PV, four 22 kW chargers, a 14 kW heat pump. The gateway also runs as a native binary against real Modbus TCP devices — see the README. Built by Michael Hiarley Silva Andrade · <a href="https://github.com/maycu-byte">github.com/maycu-byte</a>
+    Simulated site, synthetic data: 120 kWp rooftop PV, four 22 kW chargers, a 14 kW heat pump, a 100 kWh battery. Country rules as published; not legal advice. The gateway also runs as a native binary against real Modbus TCP devices — see the README. Built by Michael Hiarley Silva Andrade · <a href="https://github.com/maycu-byte">github.com/maycu-byte</a>
   </footer>
 </div>
 <script type="module" src="app.js"></script>

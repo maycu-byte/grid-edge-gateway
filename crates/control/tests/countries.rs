@@ -172,6 +172,27 @@ fn battery_discharges_while_dimmed_and_loads_get_more() {
     assert!(loads <= st.steuve_budget_kw.unwrap() - s.battery_kw[0] + 1e-9);
 }
 
+/// Regression: with a feed-in limit, curtailed PV must not look like a
+/// deficit the battery should cover (they would chase each other to 0 kW PV).
+#[test]
+fn battery_charges_instead_of_discharging_into_a_curtailed_pv() {
+    // 96 kW available, curtailed to 36 kW; 20 kW base load; zero export allowed.
+    let mut r = readings(20.0, 36.0, [false; 4], &[0.0; 4], 0.0, 0.0);
+    r.pv_available_kw = Some(96.0);
+    let cfg = with_battery(50.0, 0.0, &mut r);
+    let mut c = Controller::new(cfg);
+    let (s, _) = c.step(&clock(0.0), &feed_in(0.0), &r);
+    assert!((s.battery_kw[0] - 50.0).abs() < 1e-9, "charges the 76 kW surplus up to 50 kW: {}", s.battery_kw[0]);
+    // PV may then cover the base load and the charging.
+    assert!((s.pv_limit_pct - (20.0 + 50.0 - 0.3) / 1.2).abs() < 1e-6, "{}", s.pv_limit_pct);
+
+    // Without the available-power reading it at least never discharges.
+    r.pv_available_kw = None;
+    r.grid_kw = Some(10.0); // looks like import, but may be our own curtailment
+    let (s, _) = Controller::new(with_battery(50.0, 0.0, &mut r)).step(&clock(0.0), &feed_in(0.0), &r);
+    assert!(s.battery_kw[0] >= 0.0, "{}", s.battery_kw[0]);
+}
+
 #[test]
 fn empty_battery_does_not_discharge_and_full_one_does_not_charge() {
     let mut r = readings(20.0, 0.0, [false; 4], &[0.0; 4], 0.0, 0.0);

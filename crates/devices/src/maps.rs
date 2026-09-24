@@ -50,8 +50,8 @@ pub mod heat_pump {
     pub const STATUS_LIMITED: u16 = 2;
 }
 
-/// A site battery (EMS-facing map of a battery inverter). Power is signed:
-/// + charging, − discharging, in 0.1 kW as int16. Like the chargers, the
+/// A site battery (EMS-facing map of a battery inverter). Power is signed,
+/// positive when charging, in 0.1 kW as int16. Like the chargers, the
 /// battery has a watchdog: without a setpoint for `WATCHDOG_S` seconds its
 /// BMS goes idle (0 kW), the safe state for the grid.
 pub mod battery {
