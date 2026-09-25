@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Grid Edge Gateway</title>
-<meta name="description" content="A Rust site controller between a grid operator and a prosumer site in Germany, Austria or Switzerland: IEC 60870-5-104 towards the DSO, SunSpec Modbus towards PV, chargers, heat pump and battery, each country's dimming and feed-in rules in between — running live in your browser as WebAssembly.">
+<meta name="description" content="A Rust site controller between a grid operator and a prosumer site in Germany, Austria or Switzerland: IEC 60870-5-104 towards the DSO, SunSpec Modbus towards PV, chargers, heat pump and battery, each country's dimming and feed-in rules in between. It runs live in your browser as WebAssembly.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M9 1 3 9h4l-1 6 6-8H8z%22 fill=%22%232a78d6%22/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -318,15 +318,15 @@
 <div class="wrap">
   <header id="top">
     <div class="top"><h1>Grid Edge Gateway</h1><div class="seg lang" id="lang-seg" role="group" aria-label="Language"><button data-v="en" aria-pressed="true" lang="en">EN</button><button data-v="pt" aria-pressed="false" lang="pt">PT</button><button data-v="de" aria-pressed="false" lang="de">DE</button></div></div>
-    <p data-block="intro">A site controller in Rust that sits between a grid operator and a commercial prosumer site. It speaks IEC 60870-5-104 to the operator's control centre and SunSpec Modbus to the inverters, chargers, heat pump and battery. A model-predictive planner schedules the site against real day-ahead prices; a real-time safety layer applies each country's rules — §14a EnWG in Germany, the ElWG feed-in cap in Austria, the 3% curtailment budget and flexibility contracts in Switzerland. What runs below is that code, compiled to WebAssembly.</p>
+    <p data-block="intro">A site controller in Rust that sits between a grid operator and a commercial prosumer site. It speaks IEC 60870-5-104 to the operator's control centre and SunSpec Modbus to the inverters, chargers, heat pump and battery. A model-predictive planner schedules the site against real day-ahead prices; a real-time safety layer applies each country's rules: §14a EnWG in Germany, the ElWG feed-in cap in Austria, the 3% curtailment budget and flexibility contracts in Switzerland. What runs below is that code, compiled to WebAssembly.</p>
   </header>
   <section class="panel" id="context" data-block="context">
-    <h2>What is simulated? · read this first</h2>
+    <h2>What is simulated here</h2>
     <div class="ctx-grid">
       <div><span class="n">1</span><h3>A delivery depot in Germany</h3><p>One commercial site connected to the grid: 120 kWp of solar panels on the roof, four 22 kW chargers for its <b>electric delivery vans</b> (they come back in the late afternoon, charge overnight and leave in the morning), a 14 kW heat pump that heats the building and a 100 kWh battery.</p></div>
       <div><span class="n">2</span><h3>A rule that lets the grid operator slow it down</h3><p>On winter evenings everyone draws power at once and the neighbourhood transformer can overload. The German §14a EnWG lets the grid operator <b>reduce</b> chargers, heat pumps and batteries for a while, as long as a guaranteed minimum is left.</p></div>
       <div><span class="n">3</span><h3>The gateway in between</h3><p>The Grid Edge Gateway is the software between the grid operator and the depot. It receives the operator's commands (IEC 104), drives the devices (Modbus), keeps to the rules and, if you choose, plans the day by the electricity price. <b>In the live demo you are the grid operator:</b> press "Dim" and watch the site obey.</p></div>
-      <div><span class="n">4</span><h3>The question: what happens when the reduction ends?</h3><p>During the reduction the vans fall behind. When it ends, <b>every depot in the neighbourhood</b> catches up at the same moment, and the peak can be higher than with no reduction at all — the <i>rebound</i>. The <a href="#calculator">feeder calculator</a> simulates many depots together to find the least harmful way to bring them back.</p></div>
+      <div><span class="n">4</span><h3>What happens when the reduction ends?</h3><p>During the reduction the vans fall behind. When it ends, <b>every depot in the neighbourhood</b> catches up at the same moment, and the peak can end up higher than with no reduction at all. This is the <i>rebound</i>. The <a href="#calculator">feeder calculator</a> simulates many depots together to find the least harmful way to bring them back.</p></div>
     </div>
   </section>
 
@@ -451,7 +451,7 @@
   </section>
 
   <section class="panel">
-    <h2>Field devices (Modbus TCP) — setpoint written by the gateway → measured</h2>
+    <h2>Field devices (Modbus TCP): setpoint written by the gateway → measured</h2>
     <div class="devices" id="devices"></div>
   </section>
 
@@ -461,12 +461,12 @@
   </section>
 
   <section class="panel calc" id="calculator" aria-labelledby="calc-h">
-    <h2 id="calc-h" data-i18n="cTitle">Feeder calculator · which way of ending a reduction is most viable?</h2>
-    <p class="calc-intro" data-i18n-html="cIntro">When a §14a reduction ends at the same time for many sites, their chargers and heat pumps catch up at once. The research behind this project (20 sites × 10 days × 33 cases, <a href="https://github.com/maycu-byte/grid-edge-gateway/tree/main/docs/study/rebound">docs/study/rebound</a>) found that a slow restart makes that rebound <i>gentler</i> but not <i>smaller</i>, and that a site planning by price avoids most of it. Test any combination yourself: the page simulates every site with the gateway's own code and compares it with the same evening without a reduction.</p>
+    <h2 id="calc-h" data-i18n="cTitle">Feeder calculator: the best way to end a reduction</h2>
+    <p class="calc-intro" data-i18n-html="cIntro">When a §14a reduction ends at the same time for many sites, their chargers and heat pumps catch up at once. The research behind this project (20 sites × 10 days × 33 cases, <a href="https://github.com/maycu-byte/grid-edge-gateway/tree/main/docs/study/rebound">docs/study/rebound</a>) found that a slow restart spreads the rebound over more minutes while its peak stays about as high, and that a site planning by price avoids most of it. Test any combination yourself: the page simulates every site with the gateway's own code and compares it with the same evening without a reduction.</p>
     <div class="calc-guide" data-block="calcGuide">
-      <div><b>1 · Describe the neighbourhood</b>How many depots share the transformer, how much it carries per depot, when the vans arrive, which day and how long the reduction lasts.</div>
-      <div><b>2 · Choose how the depots come back</b>All at once, slowly (ramp), after a random wait, in groups — or let each depot plan by price. Press <i>Calculate</i>, or <i>Compare all options</i> to test them all.</div>
-      <div><b>3 · Read the evening</b><ul><li><span class="sw" style="background:var(--s-grid)"></span>blue: the neighbourhood's load with your option</li><li><span class="sw" style="background:var(--ink2)"></span>dashed: the same evening with no reduction</li><li><span class="sw" style="background:var(--critical)"></span>red: the transformer's limit — blue above it is an overload</li><li>purple band: the reduction</li></ul></div>
+      <div><b>1. Describe the neighbourhood</b>How many depots share the transformer, how much it carries per depot, when the vans arrive, which day and how long the reduction lasts.</div>
+      <div><b>2. Choose how the depots come back</b>All at once, slowly (ramp), after a random wait or in groups. Each depot can also plan by price. Press <i>Calculate</i>, or <i>Compare all options</i> to test them all.</div>
+      <div><b>3. Read the evening</b><ul><li><span class="sw" style="background:var(--s-grid)"></span>blue: the neighbourhood's load with your option</li><li><span class="sw" style="background:var(--ink2)"></span>dashed: the same evening with no reduction</li><li><span class="sw" style="background:var(--critical)"></span>red: the transformer's limit (blue above it is an overload)</li><li>purple band: the reduction</li></ul></div>
     </div>
 
     <div class="calc-body">
@@ -544,7 +544,7 @@
   </section>
 
   <section class="panel year" id="year" aria-labelledby="year-h">
-    <h2 id="year-h" data-i18n="yTitle">2025, evening by evening · how often does the problem happen?</h2>
+    <h2 id="year-h" data-i18n="yTitle">2025, evening by evening</h2>
     <p class="calc-intro" data-i18n-html="yIntro">Twenty depots on one feeder, simulated on <b>every evening of 2025</b> with that day's real electricity prices and measured weather. A grid operator only reduces consumption on days the transformer would otherwise overload. Each square is one day: pick a transformer size and a site controller, then click a day to see its evening.</p>
     <div class="year-bar">
       <div class="field"><span data-i18n="yCap">Transformer per depot</span>
@@ -572,7 +572,7 @@
   </section>
 
   <section class="panel" id="data" data-block="data">
-    <h2>Data sources · what is real and what is modelled</h2>
+    <h2>Data sources: what is measured and what is modelled</h2>
     <div class="scroll"><table>
       <thead><tr><th>Data</th><th>What is used</th><th>Source</th><th>Kind</th></tr></thead>
       <tbody>
@@ -581,7 +581,7 @@
         <tr><td>Feed-in rules</td><td>60% cap for new systems without a smart meter; no payment in negative hours</td><td>Solarspitzengesetz 2025; EEG §51</td><td class="tag-real">real · Germany</td></tr>
         <tr><td>Austria and Switzerland</td><td>70% feed-in cap; 3% free curtailment budget; flexibility contracts</td><td>ElWG (BGBl. I 91/2025); StromVG Art. 17c, StromVV Art. 19b–19d</td><td class="tag-real">real · AT / CH</td></tr>
         <tr><td>Sun and temperature, any day of 2025</td><td>Hourly air temperature and global irradiance measured for Stuttgart; PV output = irradiance × 0.85</td><td>Open-Meteo historical archive (ERA5 reanalysis, Copernicus/ECMWF), CC BY 4.0 · <code>devices/src/year2025_data.rs</code></td><td class="tag-real">real · Germany</td></tr>
-        <tr><td>Sun and temperature, the two study days</td><td>Clear-sky solar curve and daily temperature for south-west Germany, with a random cloudiness per day (sunny, mixed, overcast) — used by the Monte Carlo and rebound studies</td><td>Model in <code>devices/src/climate.rs</code>, parameters set by hand</td><td class="tag-syn">modelled</td></tr>
+        <tr><td>Sun and temperature, the two study days</td><td>Clear-sky solar curve and daily temperature for south-west Germany, with a random cloudiness per day (sunny, mixed, overcast), used by the Monte Carlo and rebound studies</td><td>Model in <code>devices/src/climate.rs</code>, parameters set by hand</td><td class="tag-syn">modelled</td></tr>
         <tr><td>Vans</td><td>Arrival time, energy wanted and hours plugged in for each van; "varied times" shifts each depot by up to ±1 h and ±30% energy</td><td>Model in <code>devices/src/sim.rs</code> and <code>closedloop/src/feeder.rs</code></td><td class="tag-syn">modelled</td></tr>
         <tr><td>Building and other loads</td><td>First-order thermal model of the building; 10–40 kW of other consumption</td><td>Model in <code>devices/src/sim.rs</code></td><td class="tag-syn">modelled</td></tr>
         <tr><td>Tariff</td><td>Day-ahead price + 12 ct/kWh of grid fees and levies; demand charge of 100 €/kW a year</td><td>Illustrative, of the order of German commercial tariffs</td><td class="tag-syn">assumed</td></tr>
@@ -589,8 +589,8 @@
     </table></div>
     <div class="data-note">
       <h3>Two highlighted days, and every day of 2025</h3>
-      <p>The two buttons are the hard cases, not an average. <b>20 January 2025</b> was a <i>Dunkelflaute</i> — little wind and sun, a 583 €/MWh evening peak — exactly when German grid operators are most likely to reduce heat pumps and chargers. <b>6 April 2025</b> had deeply negative prices at midday, the situation feed-in limits exist for.</p>
-      <p style="margin-top:8px">Any other day of 2025 can be picked as well: it runs on that day's real prices and measured weather. The section <a href="#year">2025, evening by evening</a> runs all 365 evenings for a feeder of 20 depots. That is <i>simulating a past year</i>, not <i>forecasting</i> one: day-ahead prices are known only one day in advance, and that is all the planner needs — it looks 24 hours ahead.</p>
+      <p>The buttons pick the hardest days of the year. <b>20 January 2025</b> was a <i>Dunkelflaute</i>, with little wind or sun and a price of 583 €/MWh in the evening. On days like this, German grid operators are most likely to reduce heat pumps and chargers. <b>6 April 2025</b> had deeply negative prices at midday, the situation feed-in limits exist for.</p>
+      <p style="margin-top:8px">Any other day of 2025 can be picked as well: it runs on that day's real prices and measured weather. The section <a href="#year">2025, evening by evening</a> runs all 365 evenings for a feeder of 20 depots. This replays 2025 as it happened. Day-ahead prices are published one day in advance, so a whole year of them cannot be forecast, and the planner only needs the next 24 hours.</p>
     </div>
   </section>
 
@@ -599,7 +599,7 @@
     <div class="arch" role="img" aria-label="Architecture: DSO control centre, gateway, field devices">
       <div class="box"><b>DSO control centre</b><span>SCADA · Netzleitstelle</span><span>tested with c104 / lib60870</span></div>
       <div class="link"><span>IEC 104</span><i></i><span>TLS, client certs</span></div>
-      <div class="box core"><b>grid-edge-gateway (Rust)</b><span>iec104 — controlled station, sans-IO link layer</span><span>planner — MPC: 24 h convex QP every 15 min</span><span>control — safety layer: DE/AT/CH rules, allocation</span><span>field — SunSpec discovery, watchdogs, reconnect</span><span>api — JSON / WebSocket for this dashboard</span></div>
+      <div class="box core"><b>grid-edge-gateway (Rust)</b><span>iec104: controlled station, sans-IO link layer</span><span>planner: a 24 h convex QP (MPC) every 15 min</span><span>control: safety layer: DE/AT/CH rules, allocation</span><span>field: SunSpec discovery, watchdogs, reconnect</span><span>api: JSON / WebSocket for this dashboard</span></div>
       <div class="link"><span>Modbus TCP</span><i></i><span>SunSpec</span></div>
       <div class="box"><b>Depot devices</b><span>2 × 60 kW PV inverters</span><span>grid meter (SunSpec 203)</span><span>4 × 22 kW chargers</span><span>heat pump · 100 kWh battery</span></div>
     </div>
@@ -611,9 +611,9 @@
   </section>
 
   <section class="panel" id="planning" data-block="planning">
-    <h2>The planning layer · what the MPC adds, measured</h2>
-    <p>Each plan is a convex quadratic program over 96 quarter-hours: battery dynamics with losses and an ageing cost per kWh cycled, a first-order thermal model of the building, each car's energy request and departure time (as ISO 15118 passes them to the charger), the DSO's announced dimming window as a constraint, day-ahead prices, and a demand charge on the highest quarter-hour of import. It is solved by Clarabel, an interior-point solver written in Rust — in the gateway, in the study, and in this page. Forecast errors are handled where they matter: the battery keeps a reserve only in and just before an expected dimming, the one time a shortfall cannot be bought from the grid.</p>
-    <p style="margin-top:10px">A Monte Carlo study puts a number on it: the depot over 30 random-weather days each in spring and winter, on the real prices of those days, with the DSO dimming from 17:30 to 19:30 — the same code, run 720 times.</p>
+    <h2>What the MPC planner adds, measured</h2>
+    <p>Each plan is a convex quadratic program over 96 quarter-hours: battery dynamics with losses and an ageing cost per kWh cycled, a first-order thermal model of the building, each car's energy request and departure time (as ISO 15118 passes them to the charger), the DSO's announced dimming window as a constraint, day-ahead prices, and a demand charge on the highest quarter-hour of import. It is solved by Clarabel, an interior-point solver written in Rust. The same solver runs in the gateway, in the study and in this page. Forecast errors are handled where they matter: the battery keeps a reserve only in and just before an expected dimming, the one time a shortfall cannot be bought from the grid.</p>
+    <p style="margin-top:10px">A Monte Carlo study measured it. The depot ran through 30 random-weather days each in spring and winter, on the real prices of those days, with the DSO dimming from 17:30 to 19:30. The same code ran 720 times.</p>
     <div class="scroll" style="margin-top:12px"><table>
       <thead><tr><th>Per day</th><th>Spring · 6 Apr 2025</th><th>Winter · 20 Jan 2025</th></tr></thead>
       <tbody>
@@ -625,12 +625,12 @@
         <tr><td>Cars that left without their energy</td><td class="mono">0</td><td class="mono">0</td></tr>
       </tbody>
     </table></div>
-    <p style="margin-top:10px">The value comes from prices, the peak and the building's thermal mass, not from hedging forecast errors. The real-time layer absorbs those errors within seconds, and §14a guarantees a floor. With the dimming moved to the afternoon, the chance-constrained reserve cost 5 € a day in spring and bought only a few seconds less above the floor. A plan that ignores the demand charge piles charging into the cheapest hours and raises the peak, and for a German commercial site that pays a <i>Leistungspreis</i> it can lose money.</p>
+    <p style="margin-top:10px">Most of the value comes from prices, the peak and the building's thermal mass. Forecast errors matter much less, because the real-time layer absorbs them within seconds and §14a guarantees a floor. With the dimming moved to the afternoon, the chance-constrained reserve cost 5 € a day in spring and bought only a few seconds less above the floor. A plan that ignores the demand charge piles charging into the cheapest hours and raises the peak, and for a German commercial site that pays a <i>Leistungspreis</i> it can lose money.</p>
     <p style="margin-top:10px"><a href="https://github.com/maycu-byte/grid-edge-gateway/blob/main/docs/mpc.md">The formulation, the design choices and the full study →</a></p>
   </section>
 
   <section class="panel" id="countries" data-block="countries">
-    <h2>Country rules · one controller, three rule sets</h2>
+    <h2>Country rules for one controller</h2>
     <div class="scroll"><table>
       <thead><tr><th></th><th>Consumption</th><th>Feed-in</th><th>Source</th></tr></thead>
       <tbody>
@@ -642,7 +642,7 @@
   </section>
 
   <section class="panel" id="points">
-    <h2>IEC 104 point list · common address 1</h2>
+    <h2>IEC 104 point list, common address 1</h2>
     <div class="scroll"><table>
       <thead><tr><th>IOA</th><th>Type</th><th>Direction</th><th>Meaning</th></tr></thead>
       <tbody>
@@ -652,7 +652,7 @@
         <tr><td class="mono">1001</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Active power at the grid connection, kW (+ import)</td></tr>
         <tr><td class="mono">1002</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>PV active power, kW</td></tr>
         <tr><td class="mono">1003</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Controllable devices (steuVE), kW</td></tr>
-        <tr><td class="mono">1004</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>steuVE power drawn from the grid, kW — the quantity §14a limits</td></tr>
+        <tr><td class="mono">1004</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>steuVE power drawn from the grid, kW (the quantity §14a limits)</td></tr>
         <tr><td class="mono">1005</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Consumption floor while dimmed, kW (Pmin,14a in DE)</td></tr>
         <tr><td class="mono">1006</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>Feed-in limit in force, % (feedback of 5002)</td></tr>
         <tr><td class="mono">1007</td><td class="mono">M_ME_TF_1</td><td>site → DSO</td><td>PV limit sent to the inverters, %</td></tr>
@@ -674,7 +674,7 @@
   </section>
 
   <footer data-block="footer">
-    Simulated site, synthetic data: 120 kWp rooftop PV, four 22 kW chargers, a 14 kW heat pump, a 100 kWh battery. Country rules as published; not legal advice. The gateway also runs as a native binary against real Modbus TCP devices — see the README. Built by Michael Hiarley Silva Andrade · <a href="https://github.com/maycu-byte">github.com/maycu-byte</a>
+    Simulated site with 120 kWp of rooftop PV, four 22 kW chargers, a 14 kW heat pump and a 100 kWh battery. Prices and the weather of 2025 are measured data; the depot itself is modelled. Country rules as published; not legal advice. The gateway also runs as a native binary against real Modbus TCP devices (see the README). Built by Michael Hiarley Silva Andrade · <a href="https://github.com/maycu-byte">github.com/maycu-byte</a>
   </footer>
 </div>
 </div>

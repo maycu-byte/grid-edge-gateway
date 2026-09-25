@@ -107,7 +107,7 @@ function start(hour, opts = {}) {
   fitCharts();
 }
 
-// Play, pause, or — once the day is over — start again.
+// Play and pause; once the day is over, start it again.
 function setPlaying(on) {
   playing = on;
   const over = demo && demo.time_s() >= X1 * 3600;
