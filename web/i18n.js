@@ -32,7 +32,7 @@ export const UI = {
     "Free curtailment budget (CH, 3% of yearly PV)": "Orçamento de corte gratuito (CH, 3% da energia solar do ano)", "Fault injection": "Injeção de falhas",
     "Meter offline": "Medidor fora do ar", "Charger 2 offline": "Carregador 2 fora do ar", "Heat pump offline": "Bomba de calor fora do ar", "Inverter 1 offline": "Inversor 1 fora do ar", "Battery offline": "Bateria fora do ar",
     "The device stops answering Modbus. Watch the fallbacks: a charger drops to its own 6 A failsafe and the battery goes idle after 30 s; without the meter the budget shrinks to the floor.": "O equipamento para de responder ao Modbus. Veja os modos de segurança: um carregador cai sozinho para 6 A e a bateria para depois de 30 s; sem o medidor, o limite encolhe até o piso.",
-    "Field devices (Modbus TCP) — setpoint written by the gateway → measured": "Equipamentos (Modbus TCP) — valor escrito pelo gateway → medido",
+    "Field devices (Modbus TCP): setpoint written by the gateway → measured": "Equipamentos (Modbus TCP): valor escrito pelo gateway → medido",
     "IEC 60870-5-104 frames on the DSO link": "Quadros IEC 60870-5-104 no enlace com a distribuidora", "show raw bytes": "mostrar bytes",
   },
   de: {
@@ -61,7 +61,7 @@ export const UI = {
     "Free curtailment budget (CH, 3% of yearly PV)": "Kostenloses Abregelungsbudget (CH, 3 % der PV-Jahresenergie)", "Fault injection": "Fehler einspeisen",
     "Meter offline": "Zähler offline", "Charger 2 offline": "Ladepunkt 2 offline", "Heat pump offline": "Wärmepumpe offline", "Inverter 1 offline": "Wechselrichter 1 offline", "Battery offline": "Batterie offline",
     "The device stops answering Modbus. Watch the fallbacks: a charger drops to its own 6 A failsafe and the battery goes idle after 30 s; without the meter the budget shrinks to the floor.": "Das Gerät antwortet nicht mehr per Modbus. Beobachten Sie die Rückfallebenen: ein Ladepunkt fällt selbst auf 6 A zurück, die Batterie geht nach 30 s in den Ruhezustand; ohne Zähler schrumpft das Budget auf die Mindestleistung.",
-    "Field devices (Modbus TCP) — setpoint written by the gateway → measured": "Feldgeräte (Modbus TCP) — vom Gateway geschriebener Sollwert → gemessen",
+    "Field devices (Modbus TCP): setpoint written by the gateway → measured": "Feldgeräte (Modbus TCP): vom Gateway geschriebener Sollwert → gemessen",
     "IEC 60870-5-104 frames on the DSO link": "IEC-60870-5-104-Telegramme zur Netzleitstelle", "show raw bytes": "Rohdaten zeigen",
   },
 };
@@ -69,8 +69,8 @@ export const UI = {
 // Keys used by data-i18n / data-i18n-html in the calculator section.
 export const KEYS = {
   en: {
-    cTitle: "Feeder calculator · which way of ending a reduction is most viable?",
-    cIntro: "When a §14a reduction ends at the same time for many sites, their chargers and heat pumps catch up at once. The research behind this project (20 sites × 10 days × 33 cases, <a href=\"https://github.com/maycu-byte/grid-edge-gateway/tree/main/docs/study/rebound\">docs/study/rebound</a>) found that a slow restart makes that rebound <i>gentler</i> but not <i>smaller</i>, and that a site planning by price avoids most of it. Test any combination yourself: the page simulates every site with the gateway's own code and compares it with the same evening without a reduction.",
+    cTitle: "Feeder calculator: the best way to end a reduction",
+    cIntro: "When a §14a reduction ends at the same time for many sites, their chargers and heat pumps catch up at once. The research behind this project (20 sites × 10 days × 33 cases, <a href=\"https://github.com/maycu-byte/grid-edge-gateway/tree/main/docs/study/rebound\">docs/study/rebound</a>) found that a slow restart spreads the rebound over more minutes while its peak stays about as high, and that a site planning by price avoids most of it. Test any combination yourself: the page simulates every site with the gateway's own code and compares it with the same evening without a reduction.",
     cSites: "Sites on the feeder", cSitesSub: "each is the demo depot with its own weather", cCap: "Transformer capacity per site",
     cFleet: "When the electric vans arrive", cFleetSub: "all at the same time = worst case for the transformer", cSame: "All at the same time", cMixed: "Varied times",
     cDay: "Day", winterDay: "Winter · 20 Jan 2025", springDay: "Spring · 6 Apr 2025", cDur: "Reduction from 17:30",
@@ -84,8 +84,8 @@ export const KEYS = {
     cCompare: "Options calculated so far", cCompareKey: "★ = most viable: nothing short for the vans, fewest minutes over the transformer after the release, then the lowest peak. Click a row to replay it.",
   },
   pt: {
-    cTitle: "Calculadora do alimentador · qual forma de encerrar uma redução é a mais viável?",
-    cIntro: "Quando uma redução do §14a termina ao mesmo tempo para muitos locais, os carregadores e as bombas de calor recuperam o atraso todos juntos. A pesquisa por trás deste projeto (20 locais × 10 dias × 33 casos, <a href=\"https://github.com/maycu-byte/grid-edge-gateway/tree/main/docs/study/rebound\">docs/study/rebound</a>) mostrou que religar devagar deixa esse retorno <i>mais suave</i>, mas não <i>menor</i>, e que um local que planeja pelo preço evita a maior parte dele. Teste qualquer combinação: a página simula cada local com o próprio código do gateway e compara com a mesma noite sem redução.",
+    cTitle: "Calculadora do alimentador: a melhor forma de encerrar uma redução",
+    cIntro: "Quando uma redução do §14a termina ao mesmo tempo para muitos locais, os carregadores e as bombas de calor recuperam o atraso todos juntos. A pesquisa por trás deste projeto (20 locais × 10 dias × 33 casos, <a href=\"https://github.com/maycu-byte/grid-edge-gateway/tree/main/docs/study/rebound\">docs/study/rebound</a>) mostrou que religar devagar espalha esse retorno por mais minutos, com o pico quase igual, e que um local que planeja pelo preço evita a maior parte dele. Teste qualquer combinação: a página simula cada local com o próprio código do gateway e compara com a mesma noite sem redução.",
     cSites: "Locais no alimentador", cSitesSub: "cada um é o depósito da demonstração, com seu próprio clima", cCap: "Capacidade do transformador por local",
     cFleet: "Chegada das vans elétricas", cFleetSub: "todas no mesmo horário = pior caso para o transformador", cSame: "Todas no mesmo horário", cMixed: "Horários variados",
     cDay: "Dia", winterDay: "Inverno · 20 jan 2025", springDay: "Primavera · 6 abr 2025", cDur: "Redução a partir das 17:30",
@@ -99,8 +99,8 @@ export const KEYS = {
     cCompare: "Opções calculadas até agora", cCompareKey: "★ = mais viável: nada faltando nas vans, menos minutos acima do transformador depois da liberação e, em seguida, o menor pico. Clique numa linha para reproduzi-la.",
   },
   de: {
-    cTitle: "Strang-Rechner · wie beendet man eine Reduzierung am besten?",
-    cIntro: "Endet eine §14a-Reduzierung für viele Standorte gleichzeitig, holen ihre Ladepunkte und Wärmepumpen alles auf einmal nach. Die Untersuchung hinter diesem Projekt (20 Standorte × 10 Tage × 33 Fälle, <a href=\"https://github.com/maycu-byte/grid-edge-gateway/tree/main/docs/study/rebound\">docs/study/rebound</a>) zeigt: ein langsamer Wiederanlauf macht diesen Nachholeffekt <i>sanfter</i>, aber nicht <i>kleiner</i>, und ein Standort, der nach Preis plant, vermeidet ihn größtenteils. Testen Sie jede Kombination: die Seite simuliert jeden Standort mit dem Code des Gateways und vergleicht mit demselben Abend ohne Reduzierung.",
+    cTitle: "Strang-Rechner: wie man eine Reduzierung am besten beendet",
+    cIntro: "Endet eine §14a-Reduzierung für viele Standorte gleichzeitig, holen ihre Ladepunkte und Wärmepumpen alles auf einmal nach. Die Untersuchung hinter diesem Projekt (20 Standorte × 10 Tage × 33 Fälle, <a href=\"https://github.com/maycu-byte/grid-edge-gateway/tree/main/docs/study/rebound\">docs/study/rebound</a>) zeigt, dass ein langsamer Wiederanlauf den Nachholeffekt über mehr Minuten verteilt, die Spitze aber kaum senkt, und dass ein Standort, der nach Preis plant, ihn größtenteils vermeidet. Testen Sie jede Kombination: die Seite simuliert jeden Standort mit dem Code des Gateways und vergleicht mit demselben Abend ohne Reduzierung.",
     cSites: "Standorte am Strang", cSitesSub: "jeder ist das Demo-Depot mit eigenem Wetter", cCap: "Trafoleistung je Standort",
     cFleet: "Ankunft der E-Lieferwagen", cFleetSub: "alle gleichzeitig = ungünstigster Fall für den Trafo", cSame: "Alle gleichzeitig", cMixed: "Unterschiedlich",
     cDay: "Tag", winterDay: "Winter · 20. Jan. 2025", springDay: "Frühling · 6. Apr. 2025", cDur: "Reduzierung ab 17:30",
@@ -141,7 +141,7 @@ export const T = {
     vRows: ["Energy", "Battery ageing", "Peak charge", "Peak, 15 min", "Total", "Below comfort", "EV energy missing"], vHead: ["this site", "rules only"],
     vBoth: "Both copies run on rules; switch to MPC to compare.",
     vSaved: (e) => `Saved <b class="mono">${e}</b> so far against the same site on rules alone, same weather and commands.`,
-    vBehind: (e, ahead) => `Behind by <b class="mono">${e}</b> so far against the same site on rules alone${ahead ? `: it has bought ahead of a price peak — ${ahead} than on rules. The saving comes when that energy is used.` : "."}`,
+    vBehind: (e, ahead) => `Behind by <b class="mono">${e}</b> so far against the same site on rules alone${ahead ? `: it has bought ahead of a price peak, so ${ahead} than on rules. The saving comes when that energy is used.` : "."}`,
     vBattery: (k) => `its battery holds ${k} kWh more`, vWarmer: (k) => `the building is ${k} K warmer`, vAnd: " and ",
     vSolve: (n, ms) => `${n} plans, ${ms} ms per solve (96 × 15-min QP, in your browser)`,
     dCharger: "Charger", dHp: "Heat pump", dBattery: "Battery", dNoCar: "no car", dLeaves: (t) => `leaves in ${t}`, dInside: (c) => `${c} °C inside · 14 kW rated`, dOptOut: " · opted out", dSoc: (s) => `${s}% of 100 kWh · ±50 kW`,
@@ -193,7 +193,7 @@ T.pt = {
   vRows: ["Energia", "Desgaste da bateria", "Tarifa de demanda", "Pico, 15 min", "Total", "Abaixo do conforto", "Energia faltando nas vans"], vHead: ["este local", "só regras"],
   vBoth: "As duas cópias usam só regras; troque para MPC para comparar.",
   vSaved: (e) => `Economizou <b class="mono">${e}</b> até agora contra o mesmo local só com regras, mesmo clima e mesmos comandos.`,
-  vBehind: (e, ahead) => `Atrás por <b class="mono">${e}</b> até agora contra o mesmo local só com regras${ahead ? `: comprou antes de um pico de preço — ${ahead} do que com regras. A economia vem quando essa energia for usada.` : "."}`,
+  vBehind: (e, ahead) => `Atrás por <b class="mono">${e}</b> até agora contra o mesmo local só com regras${ahead ? `: comprou antes de um pico de preço, então ${ahead} do que com regras. A economia vem quando essa energia for usada.` : "."}`,
   vBattery: (k) => `a bateria tem ${k} kWh a mais`, vWarmer: (k) => `o prédio está ${k} K mais quente`, vAnd: " e ",
   vSolve: (n, ms) => `${n} planos, ${ms} ms por solução (QP de 96 × 15 min, no seu navegador)`,
   dCharger: "Carregador", dHp: "Bomba de calor", dBattery: "Bateria", dNoCar: "sem carro", dLeaves: (t) => `sai em ${t}`, dInside: (c) => `${c} °C dentro · 14 kW nominal`, dOptOut: " · recusada", dSoc: (s) => `${s}% de 100 kWh · ±50 kW`,
@@ -243,7 +243,7 @@ T.de = {
   vRows: ["Energie", "Batteriealterung", "Leistungspreis", "Spitze, 15 min", "Summe", "Unter Komfort", "Fehlende Ladeenergie"], vHead: ["dieser Standort", "nur Regeln"],
   vBoth: "Beide Kopien laufen nur mit Regeln; wechseln Sie zu MPC für den Vergleich.",
   vSaved: (e) => `Bisher <b class="mono">${e}</b> gespart gegenüber demselben Standort nur mit Regeln, bei gleichem Wetter und gleichen Befehlen.`,
-  vBehind: (e, ahead) => `Bisher <b class="mono">${e}</b> im Rückstand gegenüber demselben Standort nur mit Regeln${ahead ? `: er hat vor einer Preisspitze eingekauft — ${ahead} als mit Regeln. Die Ersparnis kommt, wenn diese Energie genutzt wird.` : "."}`,
+  vBehind: (e, ahead) => `Bisher <b class="mono">${e}</b> im Rückstand gegenüber demselben Standort nur mit Regeln${ahead ? `: er hat vor einer Preisspitze eingekauft, daher ${ahead} als mit Regeln. Die Ersparnis kommt, wenn diese Energie genutzt wird.` : "."}`,
   vBattery: (k) => `seine Batterie hält ${k} kWh mehr`, vWarmer: (k) => `das Gebäude ist ${k} K wärmer`, vAnd: " und ",
   vSolve: (n, ms) => `${n} Pläne, ${ms} ms pro Lösung (QP mit 96 × 15 min, in Ihrem Browser)`,
   dCharger: "Ladepunkt", dHp: "Wärmepumpe", dBattery: "Batterie", dNoCar: "kein Fahrzeug", dLeaves: (t) => `fährt in ${t}`, dInside: (c) => `${c} °C innen · 14 kW Nennleistung`, dOptOut: " · widersprochen", dSoc: (s) => `${s} % von 100 kWh · ±50 kW`,
@@ -330,7 +330,7 @@ Object.assign(T.de, {
 Object.assign(KEYS.en, { orAnyDay: "or any day of 2025:" });
 Object.assign(KEYS.pt, {
   orAnyDay: "ou qualquer dia de 2025:",
-  yTitle: "2025, noite a noite · com que frequência o problema acontece?",
+  yTitle: "2025, noite a noite",
   yIntro: "Vinte depósitos no mesmo alimentador, simulados em <b>todas as noites de 2025</b> com os preços reais de energia e o clima medido de cada dia. A distribuidora só reduz o consumo nos dias em que o transformador sobrecarregaria. Cada quadrado é um dia: escolha o tamanho do transformador e o controle dos depósitos, depois clique num dia para ver a noite dele.",
   yCap: "Transformador por depósito", yCtl: "Os depósitos usam",
   yK0: "sem sobrecarga: nada a fazer", yK1: "sobrecarregaria: a redução resolve", yK2: "o retorno sobrecarrega de novo depois das 19:30", yK3: "sobrecarrega mesmo com a redução",
@@ -338,7 +338,7 @@ Object.assign(KEYS.pt, {
 });
 Object.assign(KEYS.de, {
   orAnyDay: "oder ein beliebiger Tag 2025:",
-  yTitle: "2025, Abend für Abend · wie oft tritt das Problem auf?",
+  yTitle: "2025, Abend für Abend",
   yIntro: "Zwanzig Depots an einem Strang, simuliert an <b>jedem Abend des Jahres 2025</b> mit den echten Strompreisen und dem gemessenen Wetter des Tages. Der Netzbetreiber reduziert nur an Tagen, an denen der Trafo sonst überlastet wäre. Jedes Quadrat ist ein Tag: Trafogröße und Standortregelung wählen, dann einen Tag anklicken, um seinen Abend zu sehen.",
   yCap: "Trafo je Depot", yCtl: "Die Depots laufen mit",
   yK0: "keine Überlast: nichts zu tun", yK1: "wäre überlastet: die Reduzierung löst es", yK2: "der Nachholeffekt überlastet nach 19:30 erneut", yK3: "überlastet trotz Reduzierung",

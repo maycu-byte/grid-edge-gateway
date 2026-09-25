@@ -25,7 +25,7 @@ repeated one its first pass).
 | Air temperature at 2 m, °C | Open-Meteo historical weather archive (ERA5 reanalysis, Copernicus Climate Change Service / ECMWF), 48.78 N 9.18 E (Stuttgart), hourly | CC BY 4.0 |
 | Global horizontal irradiance, W/m² | same, `shortwave_radiation`, mean over the hour | CC BY 4.0 |
 
-Checks: the series reproduce the two study days exactly — 583.40 €/MWh on
+Checks: the series reproduce the two study days exactly, with 583.40 €/MWh on
 20 January at 17:00 and −114.57 €/MWh on 6 April at 14:00
 (`climate::tests::a_real_day_matches_the_two_study_days`).
 

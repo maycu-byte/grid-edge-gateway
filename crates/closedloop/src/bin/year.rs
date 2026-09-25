@@ -6,9 +6,9 @@
 //! cargo run --release -p closedloop --bin year -- [--sites 20] [--days 0-364] [--out docs/study/year2025]
 //! ```
 //!
-//! Each day runs four cases for every site — rules and planner, each with no
+//! Each day runs four cases for every site: rules and planner, each with no
 //! reduction and with a reduction from 17:30 to 19:30 ended by the German
-//! 5-minute ramp — with different van timetables per site. The same weather
+//! 5-minute ramp. Every site has its own van timetable. The same weather
 //! applies to all sites: they are one neighbourhood. Writes `year.json` (per
 //! day: the feeder in 5-minute steps per site, minutes over several
 //! transformer sizes) and `year.md` (the summary).

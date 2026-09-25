@@ -122,7 +122,7 @@ Means over 30 days, ± half-width of the 95% confidence interval. Full tables: [
 
 | | Spring: total € | Δ vs rules € | Peak kW | Winter: total € | Δ vs rules € | Peak kW |
 |---|---|---|---|---|---|---|
-| rules | 126.6 ± 5.8 | — | 89 | 357.9 ± 6.2 | — | 110 |
+| rules | 126.6 ± 5.8 | n/a | 89 | 357.9 ± 6.2 | n/a | 110 |
 | mpc-no-peak | 111.0 ± 3.9 | −15.6 ± 2.4 | 93 | 313.5 ± 6.3 | −44.4 ± 0.2 | 118 |
 | mpc-blind | 101.0 ± 3.9 | −25.6 ± 2.2 | 34 | 298.3 ± 8.5 | −59.6 ± 2.4 | 57 |
 | **mpc** | **101.0 ± 3.9** | **−25.6 ± 2.2** | **34** | **298.2 ± 8.6** | **−59.7 ± 2.4** | **57** |
@@ -137,7 +137,7 @@ The same study, with the DSO dimming in the early afternoon, when PV is high and
 
 | | Spring: total € | Δ vs rules € | Peak kW | Winter: total € | Δ vs rules € | Peak kW |
 |---|---|---|---|---|---|---|
-| rules | 123.8 ± 5.5 | — | 85 | 381.7 ± 6.1 | — | 110 |
+| rules | 123.8 ± 5.5 | n/a | 85 | 381.7 ± 6.1 | n/a | 110 |
 | mpc-no-peak | 114.3 ± 4.5 | −9.5 ± 1.8 | 99 | 315.2 ± 6.5 | −66.5 ± 0.4 | 121 |
 | mpc-blind | 104.4 ± 5.1 | −19.5 ± 1.7 | 35 | 304.8 ± 8.4 | −76.9 ± 2.3 | 57 |
 | **mpc** | **105.0 ± 5.3** | **−18.8 ± 1.8** | **34** | **305.0 ± 8.3** | **−76.6 ± 2.3** | **59** |
