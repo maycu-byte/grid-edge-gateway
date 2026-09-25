@@ -380,3 +380,42 @@ Object.assign(T.pt, { yCompare: (o, n, r) => o === "mpc"
 Object.assign(T.de, { yCompare: (o, n, r) => o === "mpc"
   ? `<b>Mit dem Planer</b>, dasselbe Jahr: ${n} Abende über der Trafoleistung, ${r} davon erneut überlastet durch den Nachholeffekt.`
   : `<b>Nur mit Regeln</b>, dasselbe Jahr: ${n} Abende über der Trafoleistung, ${r} davon erneut überlastet durch den Nachholeffekt.` });
+
+// The flexible-connection mode (flex.js).
+Object.assign(T.en, {
+  fNote: (n, d, mw, firm, pro, lifo) => `${n}: firm room ${firm} MW. With ${mw} MW of flexible PV, the worst day of 2025 is ${d}: flexible plants lose ${pro}% of that day's energy pro rata, and the last plant in the queue ${lifo}% under last in, first out.`,
+  fAllowedNow: "share allowed this hour", fLimitSent: "feed-in limit sent (IOA 5002, % of 120 kWp)",
+  fCurtailed: (p) => `PV curtailed at the depot so far (${p}% of what the sun gave)`, fBattery: "battery state of charge",
+  fIdle: "Pick a district and play its worst day: the demo above then runs that date with the limit sent hour by hour.",
+  fPlay: "Play this day in the demo", fReplay: "Play it again", fFailed: "The districts could not be loaded",
+});
+Object.assign(T.pt, {
+  fNote: (n, d, mw, firm, pro, lifo) => `${n}: folga firme de ${firm} MW. Com ${mw} MW de solar flexível, o pior dia de 2025 é ${d}: as usinas flexíveis perdem ${pro}% da energia desse dia no ProRata, e a última usina da fila ${lifo}% na regra LIFO.`,
+  fAllowedNow: "parte permitida nesta hora", fLimitSent: "limite de injeção enviado (IOA 5002, % de 120 kWp)",
+  fCurtailed: (p) => `solar cortado no depósito até agora (${p}% do que o sol deu)`, fBattery: "carga da bateria",
+  fIdle: "Escolha um distrito e rode o pior dia dele: a demonstração acima passa a rodar essa data com o limite enviado hora a hora.",
+  fPlay: "Rodar este dia na demonstração", fReplay: "Rodar de novo", fFailed: "Não foi possível carregar os distritos",
+});
+Object.assign(T.de, {
+  fNote: (n, d, mw, firm, pro, lifo) => `${n}: feste Kapazität ${firm} MW. Mit ${mw} MW flexibler PV ist der ungünstigste Tag 2025 der ${d}: flexible Anlagen verlieren pro rata ${pro} % der Energie dieses Tages, die letzte Anlage der Warteschlange bei LIFO ${lifo} %.`,
+  fAllowedNow: "in dieser Stunde erlaubter Anteil", fLimitSent: "gesendete Einspeisegrenze (IOA 5002, % von 120 kWp)",
+  fCurtailed: (p) => `bisher am Depot abgeregelte PV (${p} % dessen, was die Sonne lieferte)`, fBattery: "Ladezustand der Batterie",
+  fIdle: "Einen Bezirk wählen und seinen ungünstigsten Tag abspielen: die Demo oben läuft dann mit diesem Datum und der stündlich gesendeten Grenze.",
+  fPlay: "Diesen Tag in der Demo abspielen", fReplay: "Noch einmal abspielen", fFailed: "Die Bezirke konnten nicht geladen werden",
+});
+Object.assign(KEYS.pt, {
+  fTitle: "Ligação flexível: o lado do local no mapa de capacidade",
+  fIntro: "Desde 2025 uma distribuidora alemã pode ligar uma usina além da capacidade firme da rede se a usina aceitar um limite (§ 17 (2b) EnWG). O <a href=\"https://maycu-byte.github.io/grid-solar-map/\" target=\"_blank\" rel=\"noopener\">mapa de capacidade</a> achou, para cada distrito de alta para média tensão do Saarland, o dia de 2025 em que as usinas flexíveis mais perdem, e a parte da produção permitida em cada hora. Rode esse dia aqui: a distribuidora envia o limite pelo IEC 104 a cada cinco minutos, e o gateway mantém a exportação do depósito abaixo dele, usando a energia no local e na bateria antes de cortar o solar.",
+  fDistrict: "Distrito", fRule: "Regra de corte", fPro: "ProRata", fLifo: "Última a entrar (última usina)",
+  fPlay: "Rodar este dia na demonstração", fMap: "Ver os distritos no mapa de capacidade",
+  fChart: "Parte da produção de uma usina flexível que a subestação permite, hora a hora",
+});
+Object.assign(KEYS.de, {
+  fTitle: "Flexibler Anschluss: die Standortseite der Kapazitätskarte",
+  fIntro: "Seit 2025 darf ein deutscher Netzbetreiber eine Anlage über die feste Netzkapazität hinaus anschließen, wenn die Anlage eine Begrenzung akzeptiert (§ 17 Abs. 2b EnWG). Die <a href=\"https://maycu-byte.github.io/grid-solar-map/\" target=\"_blank\" rel=\"noopener\">Kapazitätskarte</a> fand für jeden HS/MS-Bezirk des Saarlands den Tag 2025, an dem flexible Anlagen am meisten verlieren, und den stündlich erlaubten Anteil ihrer Erzeugung. Hier läuft dieser Tag: der Netzbetreiber sendet die Grenze alle fünf Minuten per IEC 104, und das Gateway hält die Einspeisung des Depots darunter, indem es Energie vor Ort und in der Batterie nutzt, bevor es die PV abregelt.",
+  fDistrict: "Bezirk", fRule: "Abregelungsregel", fPro: "Pro rata", fLifo: "Zuletzt angeschlossen (letzte Anlage)",
+  fPlay: "Diesen Tag in der Demo abspielen", fMap: "Die Bezirke auf der Kapazitätskarte ansehen",
+  fChart: "Anteil der Erzeugung einer flexiblen Anlage, den das Umspannwerk stündlich erlaubt",
+});
+Object.assign(UI.pt, { "Flexible connection": "Ligação flexível" });
+Object.assign(UI.de, { "Flexible connection": "Flexibler Anschluss" });
