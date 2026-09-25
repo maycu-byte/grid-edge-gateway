@@ -1,45 +1,83 @@
-import init, { Demo } from "./pkg/web_demo.js";
+import init, { Demo, feeder_site, feeder_meta } from "./pkg/web_demo.js";
+import { LOCALE, UI, KEYS, T } from "./i18n.js";
+import { BLOCKS, EXTRA } from "./blocks.js";
 
 const $ = (s) => document.querySelector(s);
 const SEED = 7;
 const X0 = 6, X1 = 30;            // chart window, hours (06:00 to 06:00 next day)
 const Y0 = -100, Y1 = 140;        // kW
-const W = 760, H = 330, M = { l: 44, r: 16, t: 12, b: 28 };
+const H = 330, M = { l: 44, r: 16, t: 12, b: 28 };
+let W = 760;                      // drawing width; grows on wide screens so the charts keep their height
+const CHART_PX = 380;             // on-screen height of the power chart, px
 const SH = 110;                   // height of the small charts
 const SAMPLE_S = 60;              // chart resolution, simulated seconds
-
-// What each country's rules mean for this depot (mirrors control::policy and
-// the example configurations).
-const COUNTRY = {
-  DE: {
-    dim: "§14a EnWG · C_SC_NA_1 · IOA 5001",
-    floor: "Pmin,14a = 0.4 × 14 kW heat pump + 5 × 0.6 × 4.2 kW (4 chargers + battery) = <b class=\"mono\">18.2 kW</b> (BNetzA BK6-22-300). PV surplus and battery discharge may be used on top.",
-    feed: "No standing cap for this site; the DSO sends setpoints.",
-    dimTitle: "§14a dimming active",
-  },
-  AT: {
-    dim: "flexibility contract · C_SC_NA_1 · IOA 5001",
-    floor: "No statutory minimum like §14a: this depot's contract keeps <b class=\"mono\">10 kW</b> and lets the DSO dim at most 2 hours a day.",
-    feed: "ElWG Spitzenkappung: the DSO capped feed-in of this new PV system at <b>70%</b> of module peak power, always in force.",
-    dimTitle: "Contract dimming active",
-  },
-  CH: {
-    dim: "flexibility contract · C_SC_NA_1 · IOA 5001",
-    floor: "Contract: <b class=\"mono\">8 kW</b> minimum, at most 3 hours a day. The owner forbade the DSO to use the heat pump (StromVV Art. 19d), so it is never limited.",
-    feed: "The DSO may curtail at most <b>3%</b> of the yearly PV energy for free (StromVV Art. 19c); beyond that only in an emergency. Late-year scenario: 3,400 of 3,420 kWh already used.",
-    dimTitle: "Contract dimming active",
-  },
-};
-
-const STRATEGY_NOTE = {
-  rules: "Rules only: the battery maximises self-consumption, cars charge at full power as they arrive, the heat pump follows its own thermostat. The safety layer applies the DSO's limits.",
-  mpc: "MPC: every 15 minutes (and when a car arrives) a 24-hour convex QP plans battery, cars and heat pump against day-ahead prices, a demand charge on the peak quarter-hour, departure times, comfort and battery ageing. The safety layer follows the plan only as far as the rules allow.",
-  "mpc-cc": "MPC with chance constraints: as MPC, but in and just before an expected dimming the battery keeps a reserve against PV and load forecast errors (ε = 5%).",
-};
 
 let demo, history, lastSample, speed = 300, playing = true, lastFrameT = null, state, plan = null;
 let country = "DE", season = "winter", strategy = "mpc", lastHour = 6;
 const faults = new Set();
+
+// ---------- language ----------
+
+let lang = "en", L = T.en;
+const textNodes = [];             // [node, English text, leading, trailing]
+const blockEn = new Map();        // data-block element → English innerHTML
+const keyEn = new Map();          // data-i18n element → English content
+
+function pickLanguage() {
+  const q = new URLSearchParams(location.search).get("lang");
+  if (q && T[q]) return q;
+  try { const v = localStorage.getItem("lang"); if (v && T[v]) return v; } catch { /* storage blocked */ }
+  const nav = (navigator.language || "en").slice(0, 2).toLowerCase();
+  return T[nav] ? nav : "en";
+}
+
+function collectText() {
+  const known = (t) => t in UI.pt || t in EXTRA.pt;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.parentElement.closest("script, style, [data-block], [data-i18n], [data-i18n-html]")) continue;
+    const t = n.nodeValue.trim();
+    if (!t || !known(t)) continue;
+    const lead = n.nodeValue.match(/^\s*/)[0], trail = n.nodeValue.match(/\s*$/)[0];
+    textNodes.push([n, t, lead, trail]);
+  }
+  document.querySelectorAll("[data-block]").forEach((e) => blockEn.set(e, e.innerHTML));
+  document.querySelectorAll("[data-i18n]").forEach((e) => keyEn.set(e, e.textContent));
+  document.querySelectorAll("[data-i18n-html]").forEach((e) => keyEn.set(e, e.innerHTML));
+}
+
+function applyLanguage(v) {
+  lang = v; L = T[v];
+  document.documentElement.lang = v;
+  try { localStorage.setItem("lang", v); } catch { /* storage blocked */ }
+  press("#lang-seg", v);
+  for (const [n, en, lead, trail] of textNodes) {
+    const tr = v === "en" ? en : UI[v][en] ?? EXTRA[v][en] ?? en;
+    n.nodeValue = lead + tr + trail;
+  }
+  for (const [e, en] of blockEn) e.innerHTML = v === "en" ? en : BLOCKS[v][e.dataset.block] ?? en;
+  document.querySelectorAll("[data-i18n]").forEach((e) => { e.textContent = KEYS[v][e.dataset.i18n] ?? keyEn.get(e); });
+  document.querySelectorAll("[data-i18n-html]").forEach((e) => { e.innerHTML = KEYS[v][e.dataset.i18nHtml] ?? keyEn.get(e); });
+  document.querySelectorAll("#log .d-dso").forEach((e) => { e.textContent = L.dsoToSite; });
+  document.querySelectorAll("#log .d-site").forEach((e) => { e.textContent = L.siteToDso; });
+  if (state) { countryTexts(); render(); }
+  syncCalc();
+  if (calcRows.length) renderCompare();
+  if (shown) { renderFeederKpis(shown.s, shown.m); drawAnim(); }
+}
+
+// Numbers in the reader's locale: 1.5 / 1,5 and 1,000 / 1.000.
+const nf = (v, d = 0) => v.toLocaleString(LOCALE[lang], { minimumFractionDigits: d, maximumFractionDigits: d });
+
+// ---------- live demo ----------
+
+function countryTexts() {
+  const info = L.country[country];
+  $("#dim-sub").textContent = info.dim;
+  $("#floor-text").innerHTML = info.floor;
+  $("#country-note").innerHTML = info.feed;
+  $("#strategy-note").textContent = L.strategy[strategy];
+}
 
 function start(hour, opts = {}) {
   country = opts.country ?? country;
@@ -57,11 +95,7 @@ function start(hour, opts = {}) {
   press("#country-seg", country);
   press("#season-seg", season);
   press("#strategy-seg", strategy);
-  const info = COUNTRY[country];
-  $("#dim-sub").textContent = info.dim;
-  $("#floor-text").innerHTML = info.floor;
-  $("#country-note").innerHTML = info.feed;
-  $("#strategy-note").textContent = STRATEGY_NOTE[strategy];
+  countryTexts();
   $("#log").replaceChildren();
   playing = true;
   $("#play").textContent = "❚❚";
@@ -81,13 +115,14 @@ function onSeg(sel, fn) {
 }
 
 function wire() {
+  onSeg("#lang-seg", applyLanguage);
   onSeg("#country-seg", (v) => start(lastHour, { country: v }));
   onSeg("#season-seg", (v) => start(lastHour, { season: v }));
   onSeg("#strategy-seg", (v) => {
     strategy = v;
     demo.set_strategy(v);
     press("#strategy-seg", v);
-    $("#strategy-note").textContent = STRATEGY_NOTE[v];
+    $("#strategy-note").textContent = L.strategy[v];
     tick(0);
   });
   onSeg("#dim-seg", (v) => { demo.command_dim(v === "on"); press("#dim-seg", v); tick(0); });
@@ -124,6 +159,7 @@ function loop(ts) {
     if (demo.time_s() >= X1 * 3600) { playing = false; $("#play").textContent = "▶"; }
     else tick(dt * speed);
   }
+  animTick(dt);
   requestAnimationFrame(loop);
 }
 
@@ -153,8 +189,8 @@ function tick(simSeconds) {
 // ---------- rendering ----------
 
 const hh = (s) => { const m = Math.floor(s / 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
-const kw = (v) => v == null ? "–" : `${v.toFixed(1)} kW`;
-const eur = (v) => `${v.toFixed(2)} €`;
+const kw = (v) => v == null ? "–" : `${nf(v, 1)} kW`;
+const eur = (v) => `${nf(v, 2)} €`;
 const x = (h) => M.l + (h - X0) / (X1 - X0) * (W - M.l - M.r);
 const yk = (v, lo, hi, height) => M.t + (hi - Math.max(lo, Math.min(hi, v))) / (hi - lo) * (height - M.t - M.b);
 const y = (v) => yk(v, Y0, Y1, H);
@@ -172,20 +208,18 @@ function render() {
 }
 
 function renderMode() {
-  const info = COUNTRY[state.jurisdiction];
+  const info = L.country[state.jurisdiction];
   const m = {
-    normal: ["✓", "var(--good)", "Normal operation", state.feed_in_in_force_pct < 100
-      ? `Feed-in limit in force: ${state.feed_in_in_force_pct.toFixed(0)}%. Export held at ${state.allowed_export_kw.toFixed(0)} kW; the depot and the battery use the rest of the PV.`
-      : state.strategy === "rules"
-        ? "No DSO limit in force. Chargers run at full power, the battery covers imports, the heat pump follows its thermostat."
-        : "No DSO limit in force. The site follows the plan: cars, battery and heat pump are scheduled against prices, departures and comfort."],
-    dimmed: ["↓", "var(--dso)", info.dimTitle, `Controllable devices may draw ${kw(state.steuve_budget_kw)} from the grid: the ${kw(state.floor_kw)} floor plus PV surplus, minus a 0.3 kW margin. The battery discharges on top.`],
-    releasing: ["↗", "var(--warn)", "Gradual release", "The dimming ended. Power returns over 5 minutes so the feeder does not see a step."],
+    normal: ["✓", "var(--good)", L.normal, state.feed_in_in_force_pct < 100
+      ? L.feedInForce(nf(state.feed_in_in_force_pct), nf(state.allowed_export_kw))
+      : state.strategy === "rules" ? L.noLimitRules : L.noLimitPlan],
+    dimmed: ["↓", "var(--dso)", info.dimTitle, L.dimmedText(kw(state.steuve_budget_kw), kw(state.floor_kw))],
+    releasing: ["↗", "var(--warn)", L.releasing, L.releasingText],
   }[state.mode];
   const notes = [];
-  if (state.emergency) notes.push(`<span style="color:var(--critical)">Emergency: day limits, budgets and opt-outs do not apply.</span>`);
-  for (const r of state.refusals) notes.push(`<span style="color:var(--warn)">Refused: ${r}.</span>`);
-  if (state.fallbacks.length) notes.push(`<span style="color:var(--critical)">Fallback: ${state.fallbacks.join(", ")}</span>`);
+  if (state.emergency) notes.push(`<span style="color:var(--critical)">${L.emergency}</span>`);
+  for (const r of state.refusals) notes.push(`<span style="color:var(--warn)">${L.refused(r)}</span>`);
+  if (state.fallbacks.length) notes.push(`<span style="color:var(--critical)">${L.fallback(state.fallbacks.join(", "))}</span>`);
   $("#mode").innerHTML = `<div class="icon" style="background:${m[1]}">${m[0]}</div><div><strong>${m[2]}</strong><span>${m[3]}</span>${notes.map((n) => `<br>${n}`).join("")}</div>`;
 }
 
@@ -197,8 +231,8 @@ function renderGauge() {
   const l = g.querySelector(".lim");
   l.style.display = lim == null ? "none" : "block";
   if (lim != null) l.style.left = `${Math.min(99.5, lim / max * 100)}%`;
-  $("#g-now").textContent = now == null ? "unknown (meter offline)" : `now ${kw(now)}`;
-  $("#g-lim").textContent = lim == null ? "no limit" : `limit ${kw(lim)}`;
+  $("#g-now").textContent = now == null ? L.gUnknown : L.gNow(kw(now));
+  $("#g-lim").textContent = lim == null ? L.gNoLimit : L.gLimit(kw(lim));
 }
 
 function renderBudget() {
@@ -208,16 +242,16 @@ function renderBudget() {
   const used = Math.min(100, state.budget_used_pct ?? 0);
   box.querySelector(".fill").style.width = `${used}%`;
   box.querySelector(".fill").style.background = used >= 100 ? "var(--critical)" : "var(--s-pv)";
-  $("#b-now").textContent = `${state.curtailed_kwh_year.toFixed(1)} kWh curtailed this year`;
-  $("#b-lim").textContent = `budget ${state.budget_kwh.toFixed(0)} kWh`;
+  $("#b-now").textContent = L.bCurtailed(nf(state.curtailed_kwh_year, 1));
+  $("#b-lim").textContent = L.bBudget(nf(state.budget_kwh));
 }
 
 function renderStats() {
   const stats = [
-    [kw(state.grid_kw), state.grid_kw == null ? "grid · meter offline" : state.grid_kw >= 0 ? "importing from grid" : "exporting to grid"],
-    [`${state.price_eur_mwh.toFixed(0)} €/MWh`, `day-ahead · you pay ${(state.import_eur_kwh * 100).toFixed(1)} ct/kWh`],
-    [`${state.indoor_c.toFixed(1)} °C`, `indoor · at least ${state.comfort_min_c.toFixed(0)} °C now · ${state.outdoor_c.toFixed(1)} °C outside`],
-    [kw(state.pv_kw), `PV · ${state.pv_available_kw.toFixed(0)} kW available · limit ${state.pv_limit_pct.toFixed(0)}%`],
+    [kw(state.grid_kw), state.grid_kw == null ? L.sMeterOff : state.grid_kw >= 0 ? L.sImport : L.sExport],
+    [`${nf(state.price_eur_mwh)} €/MWh`, L.sPrice(nf(state.import_eur_kwh * 100, 1))],
+    [`${nf(state.indoor_c, 1)} °C`, L.sIndoor(nf(state.comfort_min_c), nf(state.outdoor_c, 1))],
+    [kw(state.pv_kw), L.sPv(nf(state.pv_available_kw), nf(state.pv_limit_pct))],
   ];
   $("#stats").innerHTML = stats.map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
 }
@@ -226,52 +260,50 @@ function renderVersus() {
   const total = state.cost_eur + state.ageing_eur + state.demand_eur;
   const shadow = state.shadow_cost_eur + state.shadow_ageing_eur + state.shadow_demand_eur;
   const saved = shadow - total;
+  const n = L.vRows;
   const rows = [
-    ["Energy", eur(state.cost_eur), eur(state.shadow_cost_eur)],
-    ["Battery ageing", eur(state.ageing_eur), eur(state.shadow_ageing_eur)],
-    ["Peak charge", eur(state.demand_eur), eur(state.shadow_demand_eur)],
-    ["Peak, 15 min", `${state.peak_kw.toFixed(0)} kW`, `${state.shadow_peak_kw.toFixed(0)} kW`],
-    ["Total", `<b>${eur(total)}</b>`, `<b>${eur(shadow)}</b>`],
-    ["Below comfort", `${state.discomfort_kh.toFixed(2)} K·h`, `${state.shadow_discomfort_kh.toFixed(2)} K·h`],
-    ["EV energy missing", `${state.ev_unmet_kwh.toFixed(1)} kWh`, `${state.shadow_ev_unmet_kwh.toFixed(1)} kWh`],
+    [n[0], eur(state.cost_eur), eur(state.shadow_cost_eur)],
+    [n[1], eur(state.ageing_eur), eur(state.shadow_ageing_eur)],
+    [n[2], eur(state.demand_eur), eur(state.shadow_demand_eur)],
+    [n[3], `${nf(state.peak_kw)} kW`, `${nf(state.shadow_peak_kw)} kW`],
+    [n[4], `<b>${eur(total)}</b>`, `<b>${eur(shadow)}</b>`],
+    [n[5], `${nf(state.discomfort_kh, 2)} K·h`, `${nf(state.shadow_discomfort_kh, 2)} K·h`],
+    [n[6], `${nf(state.ev_unmet_kwh, 1)} kWh`, `${nf(state.shadow_ev_unmet_kwh, 1)} kWh`],
   ];
   const extraKwh = state.battery_kwh - state.shadow_battery_kwh;
   const warmer = state.indoor_c - state.shadow_indoor_c;
   const ahead = [
-    extraKwh > 1 ? `its battery holds ${extraKwh.toFixed(0)} kWh more` : "",
-    warmer > 0.3 ? `the building is ${warmer.toFixed(1)} K warmer` : "",
-  ].filter(Boolean).join(" and ");
-  const head = state.strategy === "rules"
-    ? "Both copies run on rules; switch to MPC to compare."
-    : saved >= 0
-      ? `Saved <b class="mono">${eur(saved)}</b> so far against the same site on rules alone, same weather and commands.`
-      : `Behind by <b class="mono">${eur(-saved)}</b> so far against the same site on rules alone${ahead ? `: it has bought ahead of a price peak — ${ahead} than on rules. The saving comes when that energy is used.` : "."}`;
-  const solve = state.plans ? `<br><span class="muted">${state.plans} plans, ${state.solve_ms.toFixed(0)} ms per solve (96 × 15-min QP, in your browser)</span>` : "";
+    extraKwh > 1 ? L.vBattery(nf(extraKwh)) : "",
+    warmer > 0.3 ? L.vWarmer(nf(warmer, 1)) : "",
+  ].filter(Boolean).join(L.vAnd);
+  const head = state.strategy === "rules" ? L.vBoth : saved >= 0 ? L.vSaved(eur(saved)) : L.vBehind(eur(-saved), ahead);
+  const solve = state.plans ? `<br><span class="muted">${L.vSolve(nf(state.plans), nf(state.solve_ms))}</span>` : "";
   $("#versus").innerHTML = `<p style="font-size:.9rem">${head}${solve}</p>
-    <table class="vs"><thead><tr><th></th><th>this site</th><th>rules only</th></tr></thead><tbody>
+    <table class="vs"><thead><tr><th></th><th>${L.vHead[0]}</th><th>${L.vHead[1]}</th></tr></thead><tbody>
     ${rows.map((r) => `<tr><td>${r[0]}</td><td class="mono">${r[1]}</td><td class="mono">${r[2]}</td></tr>`).join("")}
     </tbody></table>`;
 }
 
 function renderDevices() {
+  const st = (s) => L.st[s] ?? s;
   const cards = state.chargers.map((c, i) => {
     const pct = c.needs_kwh ? Math.min(100, c.session_kwh / c.needs_kwh * 100) : 0;
-    const car = c.needs_kwh ? `${c.session_kwh.toFixed(1)} / ${c.needs_kwh.toFixed(0)} kWh` : "no car";
-    const leaves = c.leaves_in_h != null ? ` · leaves in ${c.leaves_in_h < 1 ? `${Math.round(c.leaves_in_h * 60)} min` : `${c.leaves_in_h.toFixed(1)} h`}` : "";
-    return `<div class="dev"><header><b>Charger ${i + 1}</b><span class="pill ${c.status}">${c.status}</span></header>
-      <div class="big">${c.setpoint_a.toFixed(0)} A → ${c.current_a.toFixed(0)} A</div>
-      <div class="sub">${c.kw.toFixed(1)} kW · ${car}${leaves}</div><div class="soc"><i style="width:${pct}%"></i></div></div>`;
+    const car = c.needs_kwh ? `${nf(c.session_kwh, 1)} / ${nf(c.needs_kwh)} kWh` : L.dNoCar;
+    const leaves = c.leaves_in_h != null ? ` · ${L.dLeaves(c.leaves_in_h < 1 ? `${Math.round(c.leaves_in_h * 60)} min` : `${nf(c.leaves_in_h, 1)} h`)}` : "";
+    return `<div class="dev"><header><b>${L.dCharger} ${i + 1}</b><span class="pill ${c.status}">${st(c.status)}</span></header>
+      <div class="big">${nf(c.setpoint_a)} A → ${nf(c.current_a)} A</div>
+      <div class="sub">${nf(c.kw, 1)} kW · ${car}${leaves}</div><div class="soc"><i style="width:${pct}%"></i></div></div>`;
   });
   const hpStatus = !state.heat_pump_online ? "offline" : state.heat_pump_external ? "planned" : state.heat_pump_kw < state.heat_pump_demand_kw - 0.05 ? "limited" : "thermostat";
-  const optOut = state.heat_pump_opted_out ? " · opted out" : "";
-  cards.push(`<div class="dev"><header><b>Heat pump</b><span class="pill ${hpStatus === "limited" ? "waiting" : hpStatus === "offline" ? "offline" : "charging"}">${hpStatus}</span></header>
-    <div class="big">${state.heat_pump_limit_kw.toFixed(1)} → ${state.heat_pump_kw.toFixed(1)} kW</div>
-    <div class="sub">${state.indoor_c.toFixed(1)} °C inside · 14 kW rated${optOut}</div></div>`);
+  const optOut = state.heat_pump_opted_out ? L.dOptOut : "";
+  cards.push(`<div class="dev"><header><b>${L.dHp}</b><span class="pill ${hpStatus === "limited" ? "waiting" : hpStatus === "offline" ? "offline" : "charging"}">${st(hpStatus)}</span></header>
+    <div class="big">${nf(state.heat_pump_limit_kw, 1)} → ${nf(state.heat_pump_kw, 1)} kW</div>
+    <div class="sub">${L.dInside(nf(state.indoor_c, 1))}${optOut}</div></div>`);
   const b = state.battery;
   const bStatus = !b.online ? "offline" : b.watchdog ? "failsafe" : b.kw > 0.05 ? "charging" : b.kw < -0.05 ? "discharging" : "idle";
-  cards.push(`<div class="dev"><header><b>Battery</b><span class="pill ${bStatus === "discharging" ? "waiting" : bStatus}">${bStatus}</span></header>
-    <div class="big">${b.setpoint_kw.toFixed(1)} → ${b.kw.toFixed(1)} kW</div>
-    <div class="sub">${b.soc_pct.toFixed(0)}% of 100 kWh · ±50 kW</div><div class="soc"><i style="width:${b.soc_pct}%"></i></div></div>`);
+  cards.push(`<div class="dev"><header><b>${L.dBattery}</b><span class="pill ${bStatus === "discharging" ? "waiting" : bStatus}">${st(bStatus)}</span></header>
+    <div class="big">${nf(b.setpoint_kw, 1)} → ${nf(b.kw, 1)} kW</div>
+    <div class="sub">${L.dSoc(nf(b.soc_pct))}</div><div class="soc"><i style="width:${b.soc_pct}%"></i></div></div>`);
   $("#devices").innerHTML = cards.join("");
 }
 
@@ -296,7 +328,7 @@ function spans(key) {
 }
 
 function bands(parts, height, labels) {
-  for (const [key, name] of [["budget", "dimming"], ["exportLimit", "feed-in limit"]]) {
+  for (const [key, name] of [["budget", L.cDimming], ["exportLimit", L.cFeedin]]) {
     for (const s of spans(key)) {
       parts.push(`<rect x="${x(s.a)}" y="${M.t}" width="${Math.max(1, x(s.b) - x(s.a))}" height="${height - M.t - M.b}" fill="${css("--dso")}" opacity=".09"/>`);
       if (labels && x(s.b) - x(s.a) > 40) parts.push(`<text class="lbl" x="${x(s.a) + 4}" y="${M.t + 12}" style="fill:${css("--dso")}">${name}</text>`);
@@ -325,7 +357,24 @@ function planPoints(values, offset = 0) {
   return pts;
 }
 
+// On a wide screen the drawings get wider instead of taller.
+// Next to the side column, the power chart also grows to end level with it.
+function fitCharts() {
+  const charts = $("#charts"), side = $(".main .side"), chart = $("#chart");
+  let px = CHART_PX;
+  if (side.offsetTop === charts.offsetTop) {
+    const rest = charts.offsetHeight - chart.getBoundingClientRect().height;
+    px = Math.min(640, Math.max(CHART_PX, side.offsetHeight - rest));
+  }
+  const w = Math.max(480, Math.round(chart.clientWidth * H / px));
+  if (Math.abs(w - W) < 8) return;
+  W = w;
+  $("#chart").setAttribute("viewBox", `0 0 ${W} ${H}`);
+  for (const id of ["#price-chart", "#soc-chart", "#temp-chart"]) $(id).setAttribute("viewBox", `0 0 ${W} ${SH}`);
+}
+
 function drawCharts() {
+  fitCharts();
   drawPower();
   drawPrice();
   drawSoc();
@@ -353,13 +402,13 @@ function drawPower() {
   }
   const last = history[history.length - 1];
   if (last) {
-    const labels = [["grid", "grid"], ["pv", "PV"], ["steuve", "loads"], ["battery", "battery"]]
+    const labels = [["grid", L.cGrid], ["pv", L.cPv], ["steuve", L.cLoads], ["battery", L.cBattery]]
       .map(([k, name]) => ({ name, y: y(last[k]) }))
       .sort((a, b) => a.y - b.y);
     for (let i = 1; i < labels.length; i++) labels[i].y = Math.max(labels[i].y, labels[i - 1].y + 14);
     for (const l of labels) {
       const lx = x(last.t) + 6;
-      if (lx < W - 44) parts.push(`<text class="lbl" x="${lx}" y="${l.y + 4}">${l.name}</text>`);
+      if (lx < W - 60) parts.push(`<text class="lbl" x="${lx}" y="${l.y + 4}">${l.name}</text>`);
     }
   }
   crosshair(parts, H);
@@ -433,9 +482,9 @@ function hover(e, svg) {
   hoverT = X0 + (px - M.l) / (W - M.l - M.r) * (X1 - X0);
   const p = nearest(hoverT), tip = $("#tip");
   if (!p) { tip.style.display = "none"; drawCharts(); return; }
-  const lim = p.budget != null ? `<br>dimming budget <b>${kw(p.budget)}</b>` : "";
-  const ex = p.exportLimit != null ? `<br>export limit <b>${kw(-p.exportLimit)}</b>` : "";
-  tip.innerHTML = `${hh(p.t * 3600)}<br>grid <b>${kw(p.grid)}</b><br>PV <b>${kw(p.pv)}</b><br>chargers + heat pump <b>${kw(p.steuve)}</b><br>battery <b>${kw(p.battery)}</b> · ${p.soc.toFixed(0)}%<br>indoor <b>${p.indoor.toFixed(1)} °C</b>${lim}${ex}`;
+  const lim = p.budget != null ? `<br>${L.tBudget} <b>${kw(p.budget)}</b>` : "";
+  const ex = p.exportLimit != null ? `<br>${L.tExport} <b>${kw(-p.exportLimit)}</b>` : "";
+  tip.innerHTML = `${hh(p.t * 3600)}<br>${L.tGrid} <b>${kw(p.grid)}</b><br>${L.tPv} <b>${kw(p.pv)}</b><br>${L.tLoads} <b>${kw(p.steuve)}</b><br>${L.tBattery} <b>${kw(p.battery)}</b> · ${nf(p.soc)}%<br>${L.tIndoor} <b>${nf(p.indoor, 1)} °C</b>${lim}${ex}`;
   tip.style.display = "block";
   const box = $("#charts").getBoundingClientRect();
   let left = e.clientX - box.left + 14;
@@ -452,7 +501,7 @@ function appendFrames(frames) {
   for (const f of frames) {
     const row = document.createElement("div");
     row.className = "new";
-    const dir = f.dir === "dso" ? `<span class="d-dso">DSO → site</span>` : `<span class="d-site">site → DSO</span>`;
+    const dir = f.dir === "dso" ? `<span class="d-dso">${L.dsoToSite}</span>` : `<span class="d-site">${L.siteToDso}</span>`;
     row.innerHTML = `<span class="t">${hh(f.t_s)}</span>${dir}<span class="txt"></span>`;
     row.querySelector(".txt").textContent = f.text;
     const hex = document.createElement("span");
@@ -471,7 +520,7 @@ function scripted() {
   const q = new URLSearchParams(location.search);
   const c = (q.get("country") ?? country).toUpperCase();
   const opts = {
-    country: COUNTRY[c] ? c : "DE",
+    country: T.en.country[c] ? c : "DE",
     season: q.get("season") ?? season,
     strategy: q.get("strategy") ?? strategy,
   };
@@ -503,7 +552,332 @@ function scripted() {
   return true;
 }
 
+
+// ---------- feeder calculator ----------
+// Every site is simulated by the gateway's own code (closedloop::feeder via
+// feeder_site); the page only sums the sites, computes the metrics and plays
+// the evening back minute by minute.
+
+const RELEASE = {
+  step: { ramp: 0, delay: 0 },
+  ramp: { ramp: 300, delay: 0 },
+  wait10: { ramp: 300, delay: 600 },
+  wait30: { ramp: 300, delay: 1800 },
+  ramp30: { ramp: 1800, delay: 0 },
+};
+const REDUCTION_FROM = 17.5;
+const baselines = new Map();
+let calcRows = [], calcKey = "", calcBusy = false, shown = null;
+let FEEDER_META;
+
+const pressedIn = (sel) => document.querySelector(`${sel} button[aria-pressed="true"]`).dataset.v;
+const optionKey = (s) => [s.ctl, s.release, s.groups].join("|");
+
+function optionLabel(s) {
+  const parts = [L.ctl[s.ctl], L.rel[s.release]];
+  if (s.groups > 1) parts.push(L.groups(s.groups));
+  return parts.join(" · ");
+}
+
+function calcSettings() {
+  return {
+    sites: Number($("#c-sites").value),
+    cap: Number($("#c-cap").value),
+    fleet: pressedIn("#c-fleet"),
+    season: pressedIn("#c-season"),
+    dur: Number(pressedIn("#c-dur")),
+    release: pressedIn("#c-release"),
+    groups: Number(pressedIn("#c-groups")),
+    ctl: pressedIn("#c-ctl"),
+  };
+}
+
+function syncCalc() {
+  const s = calcSettings();
+  $("#c-sites-v").textContent = s.sites;
+  $("#c-cap-v").textContent = `${s.cap} kW`;
+  $("#c-cap-sub").textContent = L.capSub(nf(s.cap * s.sites), s.sites);
+}
+
+const yieldToPage = () => new Promise((r) => setTimeout(r, 0));
+
+// Each site's one-minute load, their sum and the customer-side totals.
+async function simulateFeeder(s, withReduction, label, progress) {
+  const rel = RELEASE[s.release];
+  const total = { load: null, sites: [], ev: 0, discomfort: 0, cost: 0 };
+  for (let i = 0; i < s.sites; i++) {
+    progress(L.siteOf(label(), i + 1, s.sites));
+    await yieldToPage();
+    const r = JSON.parse(feeder_site(
+      s.season, s.ctl, rel.ramp, rel.delay,
+      withReduction ? REDUCTION_FROM : NaN, REDUCTION_FROM + s.dur,
+      withReduction ? s.groups : 1, s.fleet === "mixed", 1001 + i, i,
+    ));
+    total.sites.push(r.load_kw);
+    total.load = total.load ? total.load.map((v, k) => v + r.load_kw[k]) : r.load_kw.slice();
+    total.ev += r.ev_unmet_kwh;
+    total.discomfort += r.discomfort_kh;
+    total.cost += r.energy_cost_eur;
+  }
+  return total;
+}
+
+function feederMetrics(s, run, base) {
+  const meta = FEEDER_META;
+  const idx = (h) => Math.min(run.load.length, Math.round((h - meta.from_h) * 3600 / meta.sample_s));
+  const end = REDUCTION_FROM + s.dur;
+  const cap = s.cap * s.sites;
+  const after = run.load.slice(idx(end));
+  const diff = after.map((v, k) => v - base.load[idx(end) + k]);
+  const over = (load) => load.filter((v) => v > cap).length;
+  const rises = run.load.slice(Math.max(0, idx(end) - 1)).map((v, k, a) => (k ? v - a[k - 1] : 0));
+  return {
+    cap,
+    peakBefore: Math.max(...run.load.slice(idx(REDUCTION_FROM - 0.5), idx(REDUCTION_FROM))),
+    peakAfter: Math.max(...after),
+    rebound: Math.max(0, ...diff),
+    pushed: diff.reduce((a, d) => a + Math.max(0, d), 0) * meta.sample_s / 3600,
+    rise: Math.max(0, ...rises),
+    minutesOver: over(run.load),
+    minutesOverAfter: over(after),
+    baseMinutesOver: over(base.load),
+    ev: run.ev,
+    evPerSite: run.ev / s.sites,
+    discomfort: run.discomfort,
+    cost: run.cost,
+  };
+}
+
+async function calculate(list) {
+  if (calcBusy) return;
+  calcBusy = true;
+  $("#c-run").disabled = $("#c-all").disabled = true;
+  const progress = (t) => { $("#c-progress").textContent = t; $("#c-progress").dataset.state = "busy"; };
+  try {
+    const first = list[0];
+    const key = [first.sites, first.cap, first.fleet, first.season, first.dur].join("|");
+    if (key !== calcKey) { calcRows = []; calcKey = key; }
+    let last = null;
+    for (const [n, s] of list.entries()) {
+      const tag = list.length > 1 ? ` (${n + 1}/${list.length})` : "";
+      const bkey = [s.sites, s.fleet, s.season, s.ctl].join("|");
+      if (!baselines.has(bkey)) baselines.set(bkey, await simulateFeeder(s, false, () => `${L.noRed(L.ctl[s.ctl])}${tag}`, progress));
+      const base = baselines.get(bkey);
+      const run = await simulateFeeder(s, true, () => `${optionLabel(s)}${tag}`, progress);
+      const m = feederMetrics(s, run, base);
+      calcRows = calcRows.filter((r) => optionKey(r.s) !== optionKey(s));
+      last = { s, m, run, base };
+      calcRows.push(last);
+      renderCompare();
+    }
+    showOption(last);
+    $("#c-progress").textContent = L.done(list.length, list.length * list[0].sites);
+    $("#c-progress").dataset.state = "done";
+  } finally {
+    calcBusy = false;
+    $("#c-run").disabled = $("#c-all").disabled = false;
+  }
+}
+
+// ----- the evening, minute by minute -----
+
+const anim = { k: 0, pos: 0, playing: false, speed: 15 };
+
+function showOption(r) {
+  shown = r;
+  $("#c-empty").hidden = true;
+  $("#c-out").hidden = false;
+  $("#c-scrub").max = String(r.run.load.length - 1);
+  $("#c-grid").innerHTML = "<i></i>".repeat(r.s.sites);
+  renderFeederKpis(r.s, r.m);
+  renderCompare();
+  anim.pos = 0; anim.k = 0;
+  setAnimPlaying(true);
+  drawAnim();
+}
+
+function setAnimPlaying(on) {
+  anim.playing = on;
+  $("#c-play").textContent = on ? "❚❚" : "▶";
+  $("#c-play").setAttribute("aria-label", on ? "Pause" : "Play");
+}
+
+function animTick(dt) {
+  if (!shown || !anim.playing) return;
+  const n = shown.run.load.length;
+  anim.pos = Math.min(n - 1, anim.pos + dt * anim.speed * 60 / FEEDER_META.sample_s);
+  const k = Math.floor(anim.pos);
+  if (k !== anim.k) { anim.k = k; drawAnim(); }
+  if (anim.pos >= n - 1) setAnimPlaying(false);
+}
+
+// What the grid operator's timeline says at minute k.
+function phaseAt(s, t) {
+  const end = REDUCTION_FROM + s.dur;
+  const lastRelease = end + (s.groups - 1) * 0.25 + (RELEASE[s.release].ramp + RELEASE[s.release].delay) / 3600;
+  if (t < REDUCTION_FROM) return ["", L.aBefore];
+  if (t < end) return ["dim", L.aDim];
+  if (t < lastRelease) return ["rel", L.aRel];
+  return ["", L.aAfter];
+}
+
+function drawAnim() {
+  const { s, run, base, m } = shown, k = anim.k;
+  const meta = FEEDER_META, dt = meta.sample_s / 3600;
+  const t = meta.from_h + (k + 0.5) * dt;
+  drawFeeder(s, run, base, m, k);
+  $("#c-clock").textContent = hh(t * 3600);
+  $("#c-scrub").value = String(k);
+  const load = run.load[k];
+  const [cls, text] = load > m.cap ? ["over", L.aOver] : phaseAt(s, t);
+  const st = $("#c-state");
+  st.className = `anim-state ${cls}`;
+  st.textContent = cls === "over" ? `${phaseAt(s, t)[1]} · ${text}` : text;
+  const scale = m.cap * 1.2;
+  const fill = $("#c-gfill");
+  fill.style.width = `${Math.max(0, Math.min(100, load / scale * 100))}%`;
+  fill.style.background = load > m.cap ? "var(--critical)" : load > 0.85 * m.cap ? "var(--warn)" : "var(--s-grid)";
+  $("#c-gnow").textContent = L.aNow(`${nf(load)} kW`, nf(load / m.cap * 100));
+  $("#c-glim").textContent = L.aCap(`${nf(m.cap)} kW`);
+  const squares = $("#c-grid").children;
+  for (let i = 0; i < squares.length; i++) {
+    const share = run.sites[i][k] / s.cap;
+    squares[i].className = share < 0 ? "exp" : share < 0.85 ? "ok" : share <= 1 ? "near" : "hot";
+    squares[i].title = `${i + 1}: ${nf(run.sites[i][k], 1)} kW`;
+  }
+}
+
+function drawFeeder(s, run, base, m, k) {
+  const meta = FEEDER_META;
+  // A narrower drawing on phones keeps the text readable.
+  const cw = $("#c-chart").clientWidth;
+  const w = cw < 520 ? 420 : Math.max(760, Math.round(cw * 260 / 330)), h = 260, mg = { l: 48, r: 12, t: 12, b: 28 };
+  $("#c-chart").setAttribute("viewBox", `0 0 ${w} ${h}`);
+  const n = run.load.length, t0 = meta.from_h, dt = meta.sample_s / 3600;
+  const hi = Math.ceil(Math.max(m.cap * 1.15, ...run.load, ...base.load) / 100) * 100;
+  const lo = Math.min(0, Math.floor(Math.min(...run.load, ...base.load) / 100) * 100);
+  const xs = (t) => mg.l + (t - t0) / (n * dt) * (w - mg.l - mg.r);
+  const ys = (v) => mg.t + (hi - v) / (hi - lo) * (h - mg.t - mg.b);
+  const parts = [];
+  const end = REDUCTION_FROM + s.dur + (s.groups - 1) * 0.25;
+  parts.push(`<rect x="${xs(REDUCTION_FROM)}" y="${mg.t}" width="${xs(end) - xs(REDUCTION_FROM)}" height="${h - mg.t - mg.b}" fill="${css("--dso")}" opacity=".09"/>`);
+  parts.push(`<text x="${xs(REDUCTION_FROM) + 4}" y="${h - mg.b - 6}" style="fill:${css("--dso")};font-weight:600">${L.reductionLbl}</text>`);
+  const step = hi - lo > 2000 ? 500 : hi - lo > 800 ? 200 : 100;
+  for (let v = lo; v <= hi; v += step) {
+    parts.push(`<line x1="${mg.l}" x2="${w - mg.r}" y1="${ys(v)}" y2="${ys(v)}" stroke="${css(v === 0 ? "--ink3" : "--hair")}" stroke-width="${v === 0 ? 1 : 0.6}"/>`);
+    parts.push(`<text x="${mg.l - 6}" y="${ys(v) + 4}" text-anchor="end">${nf(v)}</text>`);
+  }
+  for (let t = 17; t <= 22; t++) parts.push(`<text x="${xs(t)}" y="${h - 8}" text-anchor="middle">${t}:00</text>`);
+  const px = (j) => xs(t0 + (j + 0.5) * dt);
+  const path = (load, upto) => load.slice(0, upto + 1).map((v, j) => `${j ? "L" : "M"}${px(j).toFixed(1)},${ys(v).toFixed(1)}`).join("");
+  parts.push(`<line x1="${mg.l}" x2="${w - mg.r}" y1="${ys(m.cap)}" y2="${ys(m.cap)}" stroke="${css("--critical")}" stroke-width="1.5"/>`);
+  parts.push(`<text x="${w - mg.r - 4}" y="${ys(m.cap) - 5}" text-anchor="end" style="fill:${css("--critical")}">${L.transformerLbl(`${nf(m.cap)} kW`)}</text>`);
+  parts.push(`<path d="${path(base.load, n - 1)}" fill="none" stroke="${css("--ink2")}" stroke-width="1.5" stroke-dasharray="5 4"/>`);
+  parts.push(`<path d="${path(run.load, k)}" fill="none" stroke="${css("--s-grid")}" stroke-width="2.2"/>`);
+  parts.push(`<line x1="${px(k)}" x2="${px(k)}" y1="${mg.t}" y2="${h - mg.b}" stroke="${css("--ink3")}" stroke-width="1"/>`);
+  const hot = run.load[k] > m.cap;
+  parts.push(`<circle cx="${px(k)}" cy="${ys(run.load[k])}" r="5" fill="${css(hot ? "--critical" : "--s-grid")}" stroke="${css("--surface")}" stroke-width="2"/>`);
+  $("#c-chart").innerHTML = parts.join("");
+}
+
+function renderFeederKpis(s, m) {
+  const kwf = (v) => `${nf(Math.round(v))} kW`;
+  const k = [
+    [kwf(m.peakAfter), L.kPeak(nf(m.peakAfter / m.cap * 100))],
+    [`${m.minutesOverAfter} min`, L.kOver(m.minutesOverAfter, m.minutesOver, m.baseMinutesOver)],
+    [kwf(m.rebound), L.kRebound],
+    [`${nf(Math.round(m.pushed))} kWh`, L.kPushed],
+    [`${nf(Math.round(m.rise))} kW/min`, L.kRise],
+    [`${nf(m.ev, 1)} kWh`, L.kShort(nf(m.evPerSite, 2))],
+  ];
+  $("#c-kpis").innerHTML = k.map(([b, t]) => `<div class="stat"><b>${b}</b><span>${t}</span></div>`).join("");
+  const problems = [];
+  if (m.minutesOverAfter > 0) problems.push(L.vOverload(m.minutesOverAfter));
+  if (m.evPerSite > 0.1) problems.push(L.vShort(nf(m.ev, 1)));
+  $("#c-verdict").innerHTML = `<b>${optionLabel(s)}:</b> ${problems.length ? `${problems.join(L.vJoin)}.` : L.vOk}`;
+}
+
+function mostViable(rows) {
+  const ok = rows.filter((r) => r.m.evPerSite <= 0.1);
+  const pool = ok.length ? ok : rows;
+  return pool.slice().sort((a, b) => a.m.minutesOverAfter - b.m.minutesOverAfter || a.m.peakAfter - b.m.peakAfter || a.m.cost - b.m.cost)[0];
+}
+
+function renderCompare() {
+  if (!calcRows.length) { $("#c-compare").hidden = true; return; }
+  const best = mostViable(calcRows);
+  const kw0 = (v) => nf(Math.round(v));
+  const rows = calcRows.map((r, i) => `<tr data-i="${i}" class="${[r === best ? "best" : "", r === shown ? "shown" : ""].join(" ").trim()}">
+    <td>${r === best ? "★ " : ""}${optionLabel(r.s)}</td>
+    <td class="mono">${kw0(r.m.peakAfter)} (${nf(r.m.peakAfter / r.m.cap * 100)} %)</td>
+    <td class="mono">${r.m.minutesOverAfter}</td>
+    <td class="mono">${kw0(r.m.rebound)}</td>
+    <td class="mono">${kw0(r.m.pushed)}</td>
+    <td class="mono">${kw0(r.m.rise)}</td>
+    <td class="mono">${nf(r.m.ev, 1)}</td>
+    <td class="mono">${kw0(r.m.cost)} €</td></tr>`).join("");
+  $("#c-table").innerHTML = `<thead><tr>${L.tHead.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody>`;
+  $("#c-compare").hidden = false;
+}
+
+function wireCalculator() {
+  for (const sel of ["#c-fleet", "#c-season", "#c-dur", "#c-release", "#c-groups", "#c-ctl"]) {
+    onSeg(sel, (v) => press(sel, v));
+  }
+  $("#c-sites").addEventListener("input", syncCalc);
+  $("#c-cap").addEventListener("input", syncCalc);
+  syncCalc();
+  $("#c-run").addEventListener("click", () => calculate([calcSettings()]));
+  $("#c-table").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-i]");
+    if (!tr || calcBusy) return;
+    showOption(calcRows[Number(tr.dataset.i)]);
+  });
+  $("#c-all").addEventListener("click", () => {
+    const s = calcSettings();
+    const list = Object.keys(RELEASE).map((release) => ({ ...s, release, groups: 1, ctl: "rules" }));
+    list.push({ ...s, release: "wait10", groups: 4, ctl: "rules" });
+    list.push({ ...s, release: "ramp", groups: 1, ctl: "mpc" });
+    calculate(list);
+  });
+  $("#c-play").addEventListener("click", () => {
+    if (!shown) return;
+    if (!anim.playing && anim.pos >= shown.run.load.length - 1) { anim.pos = 0; anim.k = 0; }
+    setAnimPlaying(!anim.playing);
+    drawAnim();
+  });
+  onSeg("#c-speed", (v) => { anim.speed = Number(v); press("#c-speed", v); });
+  $("#c-scrub").addEventListener("input", () => {
+    if (!shown) return;
+    setAnimPlaying(false);
+    anim.k = anim.pos = Number($("#c-scrub").value);
+    drawAnim();
+  });
+}
+
+// The sidebar marks the section being read.
+function wireSidebar() {
+  const links = new Map([...document.querySelectorAll(".sidebar a.nav[href^='#']")].map((a) => [a.getAttribute("href").slice(1), a]));
+  // The current section is the last one whose top has passed a third of the window.
+  const mark = () => {
+    let current = null;
+    for (const id of links.keys()) {
+      const el = document.getElementById(id);
+      if (el && el.getBoundingClientRect().top < innerHeight / 3) current = id;
+    }
+    for (const [id, a] of links) a.classList.toggle("on", id === current);
+  };
+  addEventListener("scroll", mark, { passive: true });
+  mark();
+  addEventListener("resize", () => { if (state) drawCharts(); if (shown) drawAnim(); mark(); });
+}
+
 await init();
+FEEDER_META = JSON.parse(feeder_meta());
+collectText();
 wire();
+wireCalculator();
+wireSidebar();
+applyLanguage(pickLanguage());
 if (!scripted()) start(6);
 requestAnimationFrame(loop);

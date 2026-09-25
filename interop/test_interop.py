@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -25,7 +26,7 @@ CERTS = ROOT / "certs" / "demo"
 GRID, PV, STEUVE, STEUVE_GRID, PMIN, FEED_IN_FB, PV_LIMIT = 1001, 1002, 1003, 1004, 1005, 1006, 1007
 FEED_IN_IN_FORCE, BATTERY_KW, BATTERY_SOC, DIM_MINUTES, CURTAILED_KWH, BUDGET_USED = 1008, 1009, 1010, 1011, 1012, 1013
 DIMMED, RELEASING, METER_FALLBACK, DEVICE_FAULT = 2001, 2002, 2003, 2004
-EMERGENCY_ACTIVE, DAY_LIMIT, BUDGET_EXHAUSTED = 2005, 2006, 2007
+EMERGENCY_ACTIVE, DAY_LIMIT, BUDGET_EXHAUSTED, INVERTER_IGNORES_LIMIT = 2005, 2006, 2007, 2008
 CMD_DIM, CMD_FEED_IN, CMD_EMERGENCY = 5001, 5002, 5003
 PMIN_DEPOT = 18.2  # 4 chargers + battery + 14 kW heat pump: 0.4 * 14 + 5 * 0.6 * 4.2
 
@@ -187,6 +188,10 @@ bind = "127.0.0.1:{self.api}"
         with urllib.request.urlopen(f"http://127.0.0.1:{self.api}/api/plan", timeout=2) as r:
             return json.load(r)
 
+    def get(self, path):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.api}{path}", timeout=2) as r:
+            return r.read().decode()
+
     def sim_device(self, name, action):
         req = urllib.request.Request(f"http://127.0.0.1:{self.http}/device/{name}/{action}", method="POST")
         urllib.request.urlopen(req, timeout=2).read()
@@ -258,7 +263,7 @@ def test_general_interrogation_returns_the_point_list(dso):
     for ioa in (FEED_IN_IN_FORCE, BATTERY_KW, BATTERY_SOC, DIM_MINUTES, CURTAILED_KWH):
         assert dso.point(ioa).quality.is_good(), ioa
     assert dso.point(BUDGET_USED).quality.is_good() is False, "no curtailment budget in DE"
-    for ioa in (EMERGENCY_ACTIVE, DAY_LIMIT, BUDGET_EXHAUSTED):
+    for ioa in (EMERGENCY_ACTIVE, DAY_LIMIT, BUDGET_EXHAUSTED, INVERTER_IGNORES_LIMIT):
         assert dso.value(ioa) is False
     assert dso.value(DIMMED) is False
 
@@ -283,6 +288,60 @@ def test_dimming_keeps_grid_draw_of_controllable_devices_under_pmin(site, dso):
     time.sleep(3)
     assert site.snapshot()["steuve_budget_kw"] < 60
     assert wait_until(lambda: dso.value(RELEASING) is False, 30)
+
+
+def test_every_dimming_leaves_a_chained_report_on_disk_and_in_the_api(site, dso):
+    for _ in range(2):
+        dso.dim.value = True
+        assert dso.dim.transmit(cause=c104.Cot.ACTIVATION)
+        assert wait_until(lambda: dso.value(DIMMED) is True, 5)
+        time.sleep(2)
+        dso.dim.value = False
+        assert dso.dim.transmit(cause=c104.Cot.ACTIVATION)
+        assert wait_until(lambda: dso.value(DIMMED) is False, 5)
+    assert wait_until(lambda: len(json.loads(site.get("/api/reports"))) == 2, 5)
+    files = json.loads(site.get("/api/reports"))
+    names = [f["file"] for f in files]
+    assert names == sorted(names) and names[0].startswith("dimming-0001-")
+    on_disk = sorted(p.name for p in (site.tmp / "reports").glob("dimming-*.csv"))
+    assert on_disk == names
+    first, second = (site.get(f"/api/reports/{n}") for n in names)
+    digest = lambda csv: csv.strip().splitlines()[-1].removeprefix("# sha256: ")
+    assert f"# previous_sha256: {digest(first)}" in second, "the second report names the first"
+    assert "# site: site" in first and "# floor_kw: 18.20" in first
+    snap = site.snapshot()
+    assert snap["reports_written"] == 2 and snap["last_report_verdict"] in ("followed", "unverified", "exceeded")
+    with pytest.raises(urllib.error.HTTPError):
+        site.get("/api/reports/..%2Fdso-state.json")
+
+
+def test_an_inverter_that_ignores_its_limit_is_reported(tmp_path):
+    s = Site(tmp_path, tls=False, start="12:30")
+    s.start_sim()
+    s.start_gateway()
+    try:
+        d = Dso(s.iec)
+        try:
+            assert d.connected()
+            assert wait_until(lambda: d.point(INVERTER_IGNORES_LIMIT) is not None, 5)
+            # Without the battery nothing soaks up the PV: the limit binds.
+            s.sim_device("battery0", "offline")
+            s.sim_device("inverter1", "ignore-limit")
+            d.feed_in.value = 0.0
+            assert d.feed_in.transmit(cause=c104.Cot.ACTIVATION)
+            # The idle battery takes its own 30 s watchdog to stop charging; from
+            # then on the limit binds, and after 30 s more the gateway reports.
+            assert wait_until(lambda: d.value(INVERTER_IGNORES_LIMIT) is True, 90), s.snapshot()["fallbacks"]
+            assert d.value(DEVICE_FAULT) is True
+            snap = s.snapshot()
+            assert "inverter1 ignores its limit" in snap["fallbacks"]
+            assert snap["inverter_limit_pct"][0] < snap["inverter_limit_pct"][1], "the other inverter makes up for it"
+            s.sim_device("inverter1", "obey-limit")
+            assert wait_until(lambda: d.value(INVERTER_IGNORES_LIMIT) is False, 10)
+        finally:
+            d.close()
+    finally:
+        s.close()
 
 
 def test_feed_in_limit_is_confirmed_and_out_of_range_is_rejected(dso):

@@ -12,6 +12,8 @@
 //! and lets you take devices offline to test the gateway's fallbacks:
 //!   GET  /state
 //!   POST /device/{inverter0|meter|charger2|heatpump0}/{offline|online}
+//!   POST /device/inverter1/{ignore-limit|obey-limit}   an inverter that
+//!        stores its limit but keeps producing what the sun allows
 
 use std::future;
 use std::net::SocketAddr;
@@ -202,6 +204,10 @@ async fn serve_http(sim: Shared, port: u16) -> std::io::Result<()> {
                         }
                         (Some(d), Some(&"online")) => {
                             s.set_online(d, true);
+                            ("200 OK", r#"{"ok":true}"#.to_string())
+                        }
+                        (Some(DeviceId::Inverter(i)), Some(&action @ ("ignore-limit" | "obey-limit"))) => {
+                            s.inverters[i].ignores_limit = action == "ignore-limit";
                             ("200 OK", r#"{"ok":true}"#.to_string())
                         }
                         _ => ("404 Not Found", r#"{"error":"unknown device or action"}"#.to_string()),

@@ -691,6 +691,7 @@ mod tests {
             grid_kw: Some(40.0),
             pv_kw: Some(30.0),
             pv_available_kw: Some(30.0),
+            inverters: vec![],
             chargers: (0..4)
                 .map(|i| ChargerReading {
                     online: true,

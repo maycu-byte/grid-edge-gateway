@@ -32,6 +32,9 @@ const CH_CURTAILED_ALREADY_KWH: f64 = 3_400.0;
 /// The window in which the DSO has announced it may dim (preventive §14a
 /// control is at most 2 h a day). The planner is told; you decide.
 const ANNOUNCED_DIM_H: (f64, f64) = (17.5, 19.5);
+/// Longest random wait before power returns after a dimming (the UK Smart
+/// Charge Points Regulations 2021 use up to 600 s).
+const RELEASE_DELAY_MAX_S: f64 = 600.0;
 
 #[derive(Serialize, Clone)]
 pub struct Frame {
@@ -55,6 +58,36 @@ struct ChargerOut {
 }
 
 #[derive(Serialize)]
+struct InverterOut {
+    online: bool,
+    kw: f64,
+    /// Limit the gateway sent, %.
+    limit_pct: f64,
+    /// Fault injection: the inverter ignores its limit.
+    ignores_limit: bool,
+    /// The gateway has noticed and reported it (point 2008).
+    reported: bool,
+}
+
+/// One finished dimming, for the page's report list.
+#[derive(Serialize)]
+struct ReportOut {
+    seq: u32,
+    start_s: f64,
+    end_s: f64,
+    duration_s: f64,
+    floor_kw: f64,
+    max_kw: Option<f64>,
+    exceeded_s: f64,
+    unverified_s: f64,
+    verdict: &'static str,
+    emergency: bool,
+    sha256: String,
+    previous_sha256: String,
+    file: String,
+}
+
+#[derive(Serialize)]
 struct BatteryOut {
     online: bool,
     kw: f64,
@@ -70,6 +103,10 @@ struct StateOut {
     season: &'static str,
     strategy: &'static str,
     mode: &'static str,
+    /// While releasing: seconds of random wait left before power returns.
+    release_wait_s: Option<f64>,
+    /// A dimming is being recorded for its report right now.
+    recording: bool,
     dim: bool,
     emergency: bool,
     feed_in_limit_pct: f64,
@@ -98,6 +135,7 @@ struct StateOut {
     heat_pump_opted_out: bool,
     meter_online: bool,
     inverters_online: Vec<bool>,
+    inverters: Vec<InverterOut>,
     chargers: Vec<ChargerOut>,
     battery: BatteryOut,
     dimmed_min_today: f64,
@@ -171,6 +209,7 @@ fn fallback_name(f: &control::Fallback) -> String {
         MeterImplausible => "meter implausible".into(),
         PvOffline => "inverter offline".into(),
         PvImplausible => "inverter implausible".into(),
+        InverterIgnoresLimit(i) => format!("inverter {} ignores its limit", i + 1),
         ChargerOffline(i) => format!("charger {} offline", i + 1),
         HeatPumpOffline(_) => "heat pump offline".into(),
         BatteryOffline(_) => "battery offline".into(),
@@ -184,6 +223,10 @@ fn refusal_name(r: &control::Refusal) -> &'static str {
     }
 }
 
+fn epoch_ms(season: Season) -> i64 {
+    if season == Season::Winter { WINTER_EPOCH_MS } else { SPRING_EPOCH_MS }
+}
+
 fn new_loop(j: Jurisdiction, season: Season, strategy: Strategy, start_hour: f64, seed: u64) -> ClosedLoop {
     let scenario = Scenario {
         season,
@@ -195,9 +238,13 @@ fn new_loop(j: Jurisdiction, season: Season, strategy: Strategy, start_hour: f64
         auto_dso: false,
     };
     let mut cl = ClosedLoop::new(scenario, strategy, CONTROL_DT_S);
+    let mut cfg = site_config(j);
+    cfg.release_delay_max_s = RELEASE_DELAY_MAX_S;
+    cfg.release_delay_seed = seed;
+    let mut ctl = Controller::new(cfg).with_report_epoch(epoch_ms(season));
     if j == Jurisdiction::Ch {
         let day = (start_hour * 3600.0 / 86_400.0).floor() as i64;
-        cl.ctl = Controller::new(site_config(j)).with_totals(Totals {
+        ctl = ctl.with_totals(Totals {
             day,
             year: 2026,
             dimmed_s_today: 0.0,
@@ -205,6 +252,7 @@ fn new_loop(j: Jurisdiction, season: Season, strategy: Strategy, start_hour: f64
             curtailed_kwh_year: CH_CURTAILED_ALREADY_KWH,
         });
     }
+    cl.ctl = ctl;
     cl
 }
 
@@ -222,7 +270,7 @@ impl Demo {
         let mut demo = Demo {
             cl,
             shadow,
-            epoch_ms: if season == Season::Winter { WINTER_EPOCH_MS } else { SPRING_EPOCH_MS },
+            epoch_ms: epoch_ms(season),
             frames: Vec::new(),
             station_ns: 0,
             dso_ns: 0,
@@ -323,6 +371,48 @@ impl Demo {
         true
     }
 
+    /// Fault injection: inverter `i` keeps producing whatever the sun
+    /// allows, whatever limit it is sent (it still reports the limit back).
+    pub fn set_inverter_ignores_limit(&mut self, i: usize, on: bool) -> bool {
+        if i >= self.cl.sim.inverters.len() {
+            return false;
+        }
+        self.cl.sim.inverters[i].ignores_limit = on;
+        self.shadow.sim.inverters[i].ignores_limit = on;
+        true
+    }
+
+    /// Reports of the dimmings finished so far, oldest first.
+    pub fn reports_json(&self) -> String {
+        let out: Vec<ReportOut> = self
+            .cl
+            .ctl
+            .reports()
+            .iter()
+            .map(|r| ReportOut {
+                seq: r.seq,
+                start_s: r.start_s,
+                end_s: r.end_s,
+                duration_s: r.duration_s(),
+                floor_kw: r.floor_kw,
+                max_kw: r.max_after_grace_kw,
+                exceeded_s: r.exceeded_s,
+                unverified_s: r.unverified_s,
+                verdict: r.verdict.name(),
+                emergency: r.emergency,
+                sha256: r.sha256.clone(),
+                previous_sha256: r.previous_sha256.clone(),
+                file: r.file_name(),
+            })
+            .collect();
+        serde_json::to_string(&out).unwrap_or_default()
+    }
+
+    /// One report as CSV, as the gateway writes it to disk.
+    pub fn report_csv(&self, seq: u32) -> String {
+        self.cl.ctl.reports().iter().find(|r| r.seq == seq).map(|r| r.to_csv()).unwrap_or_default()
+    }
+
     pub fn time_s(&self) -> f64 {
         self.cl.sim.t_s
     }
@@ -375,6 +465,8 @@ impl Demo {
             season: sim.climate.season.name(),
             strategy: cl.strategy.name(),
             mode: st.map_or("normal", |s| mode_name(s.mode)),
+            release_wait_s: st.and_then(|s| s.release_wait_s),
+            recording: st.is_some_and(|s| s.mode == Mode::Dimmed),
             dim: cl.cmd.dim,
             emergency: cl.cmd.emergency,
             feed_in_limit_pct: cl.cmd.feed_in_limit_pct,
@@ -403,6 +495,18 @@ impl Demo {
             heat_pump_opted_out: cfg.heat_pumps[0].opted_out,
             meter_online: sim.meter_online,
             inverters_online: sim.inverters.iter().map(|i| i.online).collect(),
+            inverters: sim
+                .inverters
+                .iter()
+                .enumerate()
+                .map(|(i, inv)| InverterOut {
+                    online: inv.online,
+                    kw: inv.output_kw,
+                    limit_pct: cl.setpoints.inverter_limit_pct.get(i).copied().unwrap_or(cl.setpoints.pv_limit_pct),
+                    ignores_limit: inv.ignores_limit,
+                    reported: st.is_some_and(|s| s.fallbacks.contains(&control::Fallback::InverterIgnoresLimit(i))),
+                })
+                .collect(),
             chargers,
             battery: BatteryOut {
                 online: b.online,
@@ -478,6 +582,44 @@ impl Demo {
     }
 }
 
+/// Feeder calculator: one site of a feeder around a reduction, the same code
+/// as the rebound study (`closedloop::feeder`). The page runs it once per
+/// site and sums the loads. `dim_from`/`dim_to` in local hours; a NaN
+/// `dim_from` means the day without a reduction. Returns the site's
+/// one-minute grid exchange and its customer-side results as JSON.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn feeder_site(
+    season: &str,
+    strategy: &str,
+    ramp_s: f64,
+    delay_max_s: f64,
+    dim_from: f64,
+    dim_to: f64,
+    groups: u32,
+    mixed: bool,
+    seed: u32,
+    index: u32,
+) -> String {
+    let case = closedloop::FeederCase {
+        season: Season::parse(season).unwrap_or(Season::Winter),
+        strategy: Strategy::parse(strategy).unwrap_or(Strategy::Rules),
+        ramp_s: ramp_s.max(0.0),
+        delay_max_s: delay_max_s.max(0.0),
+        dim: (!dim_from.is_nan()).then_some((dim_from, dim_to)),
+        groups: groups.max(1) as usize,
+        mixed,
+    };
+    serde_json::to_string(&closedloop::run_site(&case, seed as u64, index as usize)).unwrap_or_default()
+}
+
+/// The window and resolution of `feeder_site`'s load curve.
+#[wasm_bindgen]
+pub fn feeder_meta() -> String {
+    serde_json::json!({ "from_h": closedloop::feeder::FROM_H, "to_h": closedloop::feeder::TO_H, "sample_s": closedloop::feeder::SAMPLE_S })
+        .to_string()
+}
+
 impl Demo {
     fn single_command(&mut self, ioa: u32, on: bool) {
         let cmd = Asdu::single(Cause::Activation, CA, ioa, Element::SingleCommand { on, select: false, qualifier: 0 });
@@ -519,6 +661,7 @@ impl Demo {
             (2005, st.emergency),
             (2006, st.refusals.contains(&control::Refusal::DimDayLimitReached)),
             (2007, st.refusals.contains(&control::Refusal::CurtailmentBudgetExhausted)),
+            (2008, st.fallbacks.iter().any(|f| matches!(f, control::Fallback::InverterIgnoresLimit(_)))),
         ];
         let cause = if all { Cause::Interrogated } else { Cause::Spontaneous };
         for (ioa, v) in floats {
@@ -671,6 +814,71 @@ mod tests {
         assert!(mpc < rules, "MPC {mpc:.1} € vs rules {rules:.1} €");
         let plan: serde_json::Value = serde_json::from_str(&d.plan_json()).unwrap();
         assert_eq!(plan["soc_pct"].as_array().unwrap().len(), 97);
+    }
+
+    #[test]
+    fn a_dimming_leaves_a_report_and_power_returns_after_a_random_wait() {
+        let mut d = Demo::new(17.75, 7, "DE", "spring", "rules");
+        d.advance(30.0);
+        d.command_dim(true);
+        d.advance(2.0);
+        assert!(state(&d)["recording"].as_bool().unwrap());
+        d.advance(898.0);
+        d.command_dim(false);
+        d.advance(4.0);
+        let s = state(&d);
+        assert_eq!(s["mode"], "releasing");
+        let wait = s["release_wait_s"].as_f64().expect("a random wait");
+        assert!((0.0..600.0).contains(&wait), "{wait}");
+        let reps: serde_json::Value = serde_json::from_str(&d.reports_json()).unwrap();
+        assert_eq!(reps.as_array().unwrap().len(), 1);
+        assert_eq!(reps[0]["verdict"], "followed", "{reps}");
+        assert!((reps[0]["duration_s"].as_f64().unwrap() - 900.0).abs() <= 4.0);
+        let csv = d.report_csv(1);
+        assert!(csv.starts_with("# Consumption reduction report"));
+        assert!(csv.contains("# start: 2025-04-06T15:45:32Z"), "{}", &csv[..300]);
+        assert!(control::DimmingReport::verify_csv(&csv));
+        assert_eq!(d.report_csv(2), "");
+    }
+
+    #[test]
+    fn an_inverter_ignoring_its_limit_is_reported_and_the_export_still_holds() {
+        let mut d = Demo::new(12.5, 7, "DE", "spring", "rules");
+        d.set_device_online("battery0", false);
+        d.advance(60.0);
+        assert!(d.set_inverter_ignores_limit(1, true));
+        assert!(!d.set_inverter_ignores_limit(5, true));
+        // Zero export: the limit binds even with the depot's own load.
+        d.command_feed_in(0.0);
+        d.advance(10.0);
+        let ignoring =
+            |d: &Demo| state(d)["fallbacks"].as_array().unwrap().iter().any(|f| f == "inverter 2 ignores its limit");
+        assert!(!ignoring(&d), "not before the timeout");
+        d.advance(120.0);
+        let s = state(&d);
+        assert!(ignoring(&d));
+        assert!(s["inverters"][1]["reported"].as_bool().unwrap(), "{s}");
+        assert!(!s["inverters"][0]["reported"].as_bool().unwrap());
+        let (l0, l1) =
+            (s["inverters"][0]["limit_pct"].as_f64().unwrap(), s["inverters"][1]["limit_pct"].as_f64().unwrap());
+        assert!(l0 < l1, "the other inverter makes up for it: {s}");
+        assert!(s["export_kw"].as_f64().unwrap() <= 1.0, "{s}");
+        let frames: Vec<serde_json::Value> = serde_json::from_str(&d.take_frames_json()).unwrap();
+        assert!(frames.iter().any(|f| f["text"].as_str().unwrap().contains("IOA 2008 ON")));
+    }
+
+    #[test]
+    fn feeder_site_matches_the_study() {
+        let with: serde_json::Value =
+            serde_json::from_str(&feeder_site("winter", "rules", 300.0, 0.0, 17.5, 19.5, 1, false, 1, 0)).unwrap();
+        let without: serde_json::Value =
+            serde_json::from_str(&feeder_site("winter", "rules", 300.0, 0.0, f64::NAN, 0.0, 1, false, 1, 0)).unwrap();
+        let a = with["load_kw"].as_array().unwrap();
+        let b = without["load_kw"].as_array().unwrap();
+        assert_eq!(a.len(), 330);
+        let after = |v: &Vec<serde_json::Value>| v[180..].iter().map(|x| x.as_f64().unwrap()).fold(0.0, f64::max);
+        assert!(after(a) > after(b) + 50.0, "a rebound after 19:30: {} vs {}", after(a), after(b));
+        assert_eq!(with["ev_unmet_kwh"], 0.0);
     }
 
     #[test]

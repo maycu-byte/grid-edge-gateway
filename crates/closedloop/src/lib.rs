@@ -4,10 +4,12 @@
 //! that compares rule-based control with MPC variants.
 
 pub mod adapter;
+pub mod feeder;
 pub mod forecast;
 pub mod metrics;
 pub mod runner;
 
+pub use feeder::{FeederCase, SiteRun, run_site};
 pub use metrics::Metrics;
 pub use planning::PlanRecord;
 pub use runner::{ClosedLoop, Scenario, Strategy, site_config};

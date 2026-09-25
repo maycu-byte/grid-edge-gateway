@@ -63,6 +63,9 @@ pub struct InverterSim {
     pub revert_s: f64,
     last_limit_write_s: f64,
     pub online: bool,
+    /// Fault injection: stores the limit it is sent, reports it back, and
+    /// keeps producing whatever the sun allows.
+    pub ignores_limit: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +275,7 @@ impl SiteSim {
             revert_s: 0.0,
             last_limit_write_s: start_s,
             online: true,
+            ignores_limit: false,
         };
         let charger = ChargerSim {
             max_current_a: 32.0,
@@ -444,7 +448,7 @@ impl SiteSim {
             if inv.limit_enabled && inv.revert_s > 0.0 && t - inv.last_limit_write_s > inv.revert_s {
                 inv.limit_enabled = false;
             }
-            let cap = if inv.limit_enabled { inv.limit_pct / 100.0 } else { 1.0 };
+            let cap = if inv.limit_enabled && !inv.ignores_limit { inv.limit_pct / 100.0 } else { 1.0 };
             let target = inv.rated_kw * solar.min(cap);
             let max_step = inv.rated_kw * INVERTER_RAMP_PER_S * dt_s.max(0.0);
             inv.output_kw += (target - inv.output_kw).clamp(-max_step, max_step);

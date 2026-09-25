@@ -29,6 +29,13 @@ pub fn collect(f: &FieldState, stale: Duration) -> (Readings, Views) {
         grid_kw: f.meter_kw.fresh(stale),
         pv_kw,
         pv_available_kw,
+        inverters: inverters
+            .iter()
+            .map(|r| match r {
+                Some(r) => control::InverterReading { online: true, kw: r.kw, rated_kw: r.rated_kw },
+                None => control::InverterReading::default(),
+            })
+            .collect(),
         chargers: chargers
             .iter()
             .map(|c| match c {
@@ -133,6 +140,7 @@ pub fn fallback_name(f: &Fallback) -> String {
         Fallback::MeterImplausible => "meter implausible".into(),
         Fallback::PvOffline => "inverter offline".into(),
         Fallback::PvImplausible => "inverter implausible".into(),
+        Fallback::InverterIgnoresLimit(i) => format!("inverter{i} ignores its limit"),
         Fallback::ChargerOffline(i) => format!("charger{i} offline"),
         Fallback::HeatPumpOffline(i) => format!("heatpump{i} offline"),
         Fallback::BatteryOffline(i) => format!("battery{i} offline"),
