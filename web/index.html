@@ -72,6 +72,38 @@
   .data-note { background: var(--sunk); border-radius: 10px; padding: 14px 16px; margin-top: 14px; }
   .data-note h3 { font-size: 1rem; }
   .data-note p { font-size: .92rem; max-width: 110ch; }
+  .day-pick { font: inherit; font-weight: 400; color: var(--ink); background: var(--surface); border: 1px solid var(--hair); border-radius: 8px; padding: 6px 8px; }
+  .day-pick.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .day-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-weight: 400; font-size: .82rem; color: var(--ink3); }
+  .day-row .seg { flex: 1 1 260px; }
+
+  /* the year */
+  .year-bar { display: flex; gap: 16px 28px; flex-wrap: wrap; margin-top: 14px; }
+  .year-bar .field { flex: 1 1 280px; }
+  .year-body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 24px; margin-top: 16px; align-items: start; }
+  @media (max-width: 1100px) { .year-body { grid-template-columns: 1fr; } }
+  .year-cal { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .calendar { display: grid; grid-template-columns: 34px repeat(31, minmax(0, 1fr)); gap: 3px; font-size: .74rem; color: var(--ink3); }
+  .calendar .m { align-self: center; }
+  .calendar button { aspect-ratio: 1; border: 0; border-radius: 3px; padding: 0; cursor: pointer; background: var(--sunk); min-width: 0; }
+  .calendar button.k0 { background: var(--sunk); }
+  .calendar button.k1 { background: var(--good); opacity: .55; }
+  .calendar button.k2 { background: var(--critical); }
+  .calendar button.k3 { background: var(--warn); }
+  .calendar button.sel { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .calendar button:focus-visible { outline: 2px solid var(--accent); }
+  .year-key { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .82rem; color: var(--ink2); }
+  .year-key > span { display: inline-flex; gap: 6px; align-items: center; }
+  .year-key i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .year-key i.k0 { background: var(--sunk); border: 1px solid var(--hair); } .year-key i.k1 { background: var(--good); opacity: .55; } .year-key i.k2 { background: var(--critical); } .year-key i.k3 { background: var(--warn); }
+  #y-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .y-compare { grid-column: 1 / -1; margin: 0; max-width: none; background: var(--surface); border: 1px solid var(--good); border-radius: 8px; padding: 10px 12px; font-size: .9rem; color: var(--ink); }
+  .year-day { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .year-day h3 { font-size: 1.1rem; margin: 0; }
+  #y-chart { width: 100%; height: auto; display: block; }
+  #y-chart text { font: 12px var(--sans); fill: var(--ink3); }
+  .year-day .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .year-day .open { align-self: flex-start; border: 1px solid var(--accent); color: var(--accent); background: var(--surface); border-radius: 8px; padding: 7px 14px; font: 600 .9rem var(--sans); cursor: pointer; }
   .tag-real { color: var(--good); font-weight: 600; } .tag-syn { color: var(--warn); font-weight: 600; }
   h1 { font-size: clamp(1.8rem, 3.6vw, 2.5rem); line-height: 1.1; margin: 0; letter-spacing: -.02em; text-wrap: balance; }
   h2 { font-size: .76rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink3); margin: 0 0 12px; font-weight: 600; }
@@ -261,6 +293,7 @@
     <a class="nav" href="#context">What is simulated?</a>
     <a class="nav" href="#demo">Live demo</a>
     <a class="nav" href="#calculator">Feeder calculator</a>
+    <a class="nav" href="#year">2025, day by day</a>
     <a class="nav" href="#data">Data sources</a>
     <a class="nav" href="#how">How it works</a>
     <a class="nav" href="#planning">The MPC study</a>
@@ -296,13 +329,15 @@
       </div>
       <small id="country-note"></small>
     </div>
-    <div class="field half-l">Day <small>real German day-ahead prices, bidding zone DE-LU (SMARD)</small>
-      <div class="seg" id="season-seg">
-        <button data-v="winter" aria-pressed="true">Winter · 20 Jan 2025</button>
-        <button data-v="spring" aria-pressed="false">Spring · 6 Apr 2025</button>
+    <div class="field" style="grid-column: 1 / -1">Day <small>the real extremes of 2025: 583 €/MWh on 20 Jan at 17:00, −250 €/MWh on 11 May at 13:00, −4.2 °C on 22 Nov, 33.5 °C and 476 €/MWh on 1 Jul (SMARD prices, measured weather)</small>
+      <div class="day-row">
+        <div class="seg" id="season-seg">
+          <button data-v="2025-01-20" aria-pressed="true" title="583 €/MWh 17:00 · −1.5 °C">Dunkelflaute · 20 Jan</button><button data-v="2025-05-11" aria-pressed="false" title="−250 €/MWh 13:00">Negative noon · 11 May</button><button data-v="2025-11-22" aria-pressed="false" title="−4.2 °C">Coldest day · 22 Nov</button><button data-v="2025-07-01" aria-pressed="false" title="33.5 °C · 476 €/MWh 20:00">Heatwave · 1 Jul</button>
+        </div>
+        <span>or any day:</span><input type="date" class="day-pick" id="day-pick" min="2025-01-01" max="2025-12-31" value="2025-01-20" aria-label="Any day of 2025">
       </div>
     </div>
-    <div class="field half-r">Controller <small>switch any time; a rules-only copy runs alongside</small>
+    <div class="field" style="grid-column: 1 / -1">Controller <small>switch any time; a rules-only copy runs alongside</small>
       <div class="seg" id="strategy-seg">
         <button data-v="rules" aria-pressed="false">Rules only</button>
         <button data-v="mpc" aria-pressed="true">MPC planner</button>
@@ -361,7 +396,7 @@
         <span><i class="dash"></i>DSO limit in force</span>
       </div>
       <svg id="chart" viewBox="0 0 760 330" role="img" aria-label="Power over the simulated day"></svg>
-      <h2 class="sub">Day-ahead price, €/MWh <span class="key">winter peak 583 at 17:00 · spring low −115 at 14:00</span></h2>
+      <h2 class="sub">Day-ahead price, €/MWh <span class="key">2025: highest 583 on 20 Jan at 17:00 · lowest −250 on 11 May at 13:00</span></h2>
       <svg id="price-chart" viewBox="0 0 760 110" role="img" aria-label="Day-ahead price"></svg>
       <h2 class="sub">Battery state of charge, % <span class="key"><i class="solid bat"></i>actual <i class="dashk bat"></i>plan</span></h2>
       <svg id="soc-chart" viewBox="0 0 760 110" role="img" aria-label="Battery state of charge, actual and planned"></svg>
@@ -435,10 +470,16 @@
           <div class="seg" id="c-fleet"><button data-v="same" aria-pressed="true" data-i18n="cSame">All at the same time</button><button data-v="mixed" aria-pressed="false" data-i18n="cMixed">Varied times</button></div>
         </div>
         <div class="field"><span data-i18n="cDay">Day</span>
-          <div class="seg" id="c-season"><button data-v="winter" aria-pressed="true" data-i18n="winterDay">Winter · 20 Jan 2025</button><button data-v="spring" aria-pressed="false" data-i18n="springDay">Spring · 6 Apr 2025</button></div>
+          <div class="seg" id="c-season"><button data-v="2025-01-20" aria-pressed="true" data-i18n="xDunkel" title="583 €/MWh 17:00 · −1.5 °C">Dunkelflaute · 20 Jan</button><button data-v="2025-05-11" aria-pressed="false" data-i18n="xNeg" title="−250 €/MWh 13:00">Negative noon · 11 May</button><button data-v="2025-11-22" aria-pressed="false" data-i18n="xCold" title="−4.2 °C">Coldest day · 22 Nov</button><button data-v="2025-07-01" aria-pressed="false" data-i18n="xHeat" title="33.5 °C · 476 €/MWh 20:00">Heatwave · 1 Jul</button></div>
+          <div class="day-row"><span data-i18n="orAnyDay">or any day of 2025:</span><input type="date" class="day-pick" id="c-day-pick" min="2025-01-01" max="2025-12-31" value="2025-01-20" aria-label="Any day of 2025"></div>
         </div>
+        <div class="pair">
         <div class="field"><span data-i18n="cDur">Reduction from 17:30</span>
           <div class="seg" id="c-dur"><button data-v="1" aria-pressed="false">1 h</button><button data-v="2" aria-pressed="true">2 h</button><button data-v="3" aria-pressed="false">3 h</button></div>
+        </div>
+        <div class="field"><span data-i18n="cGroups">Grid operator releases</span> <small data-i18n="cGroupsSub">groups 15 min apart</small>
+          <div class="seg" id="c-groups"><button data-v="1" aria-pressed="true" data-i18n="gAll">All at once</button><button data-v="2" aria-pressed="false" data-i18n="g2">2 groups</button><button data-v="4" aria-pressed="false" data-i18n="g4">4 groups</button></div>
+        </div>
         </div>
         <div class="field"><span data-i18n="cRelease">How each site comes back</span>
           <div class="seg" id="c-release">
@@ -448,9 +489,6 @@
             <button data-v="wait30" aria-pressed="false" data-i18n="rWait30">Ramp + wait ≤30 min</button>
             <button data-v="ramp30" aria-pressed="false" data-i18n="rRamp30">30-min ramp</button>
           </div>
-        </div>
-        <div class="field"><span data-i18n="cGroups">Grid operator releases</span> <small data-i18n="cGroupsSub">groups 15 min apart</small>
-          <div class="seg" id="c-groups"><button data-v="1" aria-pressed="true" data-i18n="gAll">All at once</button><button data-v="2" aria-pressed="false" data-i18n="g2">2 groups</button><button data-v="4" aria-pressed="false" data-i18n="g4">4 groups</button></div>
         </div>
         <div class="field"><span data-i18n="cCtl">Site controller</span> <small data-i18n="cCtlSub">the planner schedules against day-ahead prices; slower</small>
           <div class="seg" id="c-ctl"><button data-v="rules" aria-pressed="true" data-i18n="ctlRules">Rules only</button><button data-v="mpc" aria-pressed="false" data-i18n="ctlMpc">Planner (MPC)</button></div>
@@ -492,25 +530,54 @@
     </div>
   </section>
 
+  <section class="panel year" id="year" aria-labelledby="year-h">
+    <h2 id="year-h" data-i18n="yTitle">2025, evening by evening · how often does the problem happen?</h2>
+    <p class="calc-intro" data-i18n-html="yIntro">Twenty depots on one feeder, simulated on <b>every evening of 2025</b> with that day's real electricity prices and measured weather. A grid operator only reduces consumption on days the transformer would otherwise overload. Each square is one day: pick a transformer size and a site controller, then click a day to see its evening.</p>
+    <div class="year-bar">
+      <div class="field"><span data-i18n="yCap">Transformer per depot</span>
+        <div class="seg" id="y-cap"></div>
+      </div>
+      <div class="field"><span data-i18n="yCtl">Depots run on</span>
+        <div class="seg" id="y-ctl"><button data-v="rules" aria-pressed="true" data-i18n="ctlRules">Rules only</button><button data-v="mpc" aria-pressed="false" data-i18n="ctlMpc">Planner (MPC)</button></div>
+      </div>
+    </div>
+    <div class="year-body">
+      <div class="year-cal">
+        <div class="calendar" id="y-cal" role="grid" aria-label="2025"></div>
+        <div class="year-key">
+          <span><i class="k0"></i><span data-i18n="yK0">no overload: nothing to do</span></span>
+          <span><i class="k1"></i><span data-i18n="yK1">would overload: the reduction solves it</span></span>
+          <span><i class="k2"></i><span data-i18n="yK2">the rebound overloads it again after 19:30</span></span>
+          <span><i class="k3"></i><span data-i18n="yK3">overloads even with the reduction</span></span>
+        </div>
+        <div class="calc-kpis" id="y-kpis"></div>
+      </div>
+      <div class="year-day" id="y-day">
+        <p class="muted" id="y-loading" data-i18n="yLoading">Loading the year…</p>
+      </div>
+    </div>
+  </section>
+
   <section class="panel" id="data" data-block="data">
     <h2>Data sources · what is real and what is modelled</h2>
     <div class="scroll"><table>
       <thead><tr><th>Data</th><th>What is used</th><th>Source</th><th>Kind</th></tr></thead>
       <tbody>
-        <tr><td>Electricity prices</td><td>Hourly day-ahead prices of the German–Luxembourg bidding zone for 20–22 January 2025 (peak 583 €/MWh at 17:00) and 6–8 April 2025 (−115 €/MWh at 14:00)</td><td>SMARD.de (Bundesnetzagentur), bidding zone DE-LU · <code>devices/src/prices_data.rs</code></td><td class="tag-real">real · Germany</td></tr>
+        <tr><td>Electricity prices</td><td>Hourly day-ahead prices of the German–Luxembourg bidding zone for every hour of 2025 (from 1 October the mean of the four 15-minute products); the two highlighted days are 20 January (peak 583 €/MWh at 17:00) and 6 April (−115 €/MWh at 14:00)</td><td>SMARD.de (Bundesnetzagentur), bidding zone DE-LU, CC BY 4.0, via the Energy-Charts API · <code>devices/src/year2025_data.rs</code></td><td class="tag-real">real · Germany</td></tr>
         <tr><td>Reduction rules</td><td>Minimum power Pmin,14a = 4.2 kW per device, simultaneity factor, 5-minute gradual release, proof of compliance</td><td>BNetzA decision BK6-22-300, Anlage 1 (§14a EnWG)</td><td class="tag-real">real · Germany</td></tr>
         <tr><td>Feed-in rules</td><td>60% cap for new systems without a smart meter; no payment in negative hours</td><td>Solarspitzengesetz 2025; EEG §51</td><td class="tag-real">real · Germany</td></tr>
         <tr><td>Austria and Switzerland</td><td>70% feed-in cap; 3% free curtailment budget; flexibility contracts</td><td>ElWG (BGBl. I 91/2025); StromVG Art. 17c, StromVV Art. 19b–19d</td><td class="tag-real">real · AT / CH</td></tr>
-        <tr><td>Sun and temperature</td><td>Clear-sky solar curve and daily temperature for south-west Germany, with a random cloudiness per day (sunny, mixed, overcast)</td><td>Model in <code>devices/src/climate.rs</code>, parameters set by hand</td><td class="tag-syn">modelled</td></tr>
+        <tr><td>Sun and temperature, any day of 2025</td><td>Hourly air temperature and global irradiance measured for Stuttgart; PV output = irradiance × 0.85</td><td>Open-Meteo historical archive (ERA5 reanalysis, Copernicus/ECMWF), CC BY 4.0 · <code>devices/src/year2025_data.rs</code></td><td class="tag-real">real · Germany</td></tr>
+        <tr><td>Sun and temperature, the two study days</td><td>Clear-sky solar curve and daily temperature for south-west Germany, with a random cloudiness per day (sunny, mixed, overcast) — used by the Monte Carlo and rebound studies</td><td>Model in <code>devices/src/climate.rs</code>, parameters set by hand</td><td class="tag-syn">modelled</td></tr>
         <tr><td>Vans</td><td>Arrival time, energy wanted and hours plugged in for each van; "varied times" shifts each depot by up to ±1 h and ±30% energy</td><td>Model in <code>devices/src/sim.rs</code> and <code>closedloop/src/feeder.rs</code></td><td class="tag-syn">modelled</td></tr>
         <tr><td>Building and other loads</td><td>First-order thermal model of the building; 10–40 kW of other consumption</td><td>Model in <code>devices/src/sim.rs</code></td><td class="tag-syn">modelled</td></tr>
         <tr><td>Tariff</td><td>Day-ahead price + 12 ct/kWh of grid fees and levies; demand charge of 100 €/kW a year</td><td>Illustrative, of the order of German commercial tariffs</td><td class="tag-syn">assumed</td></tr>
       </tbody>
     </table></div>
     <div class="data-note">
-      <h3>Why only two days? Could it run a whole year?</h3>
-      <p>The two days are the hard cases, not an average. <b>20 January 2025</b> was a <i>Dunkelflaute</i> — little wind and sun, a 583 €/MWh evening peak — exactly when German grid operators are most likely to reduce heat pumps and chargers. <b>6 April 2025</b> had deeply negative prices at midday, the situation feed-in limits exist for. Each day is simulated second by second with the real control code, which keeps the page fast.</p>
-      <p style="margin-top:8px">A whole year is possible: SMARD publishes every hour of the year, and the gateway can already fetch prices from ENTSO-E and Energy-Charts. A year also needs real weather (for example from the German Weather Service, DWD, or PVGIS) and a year of van timetables. That is <i>simulating a past year</i>, not <i>forecasting</i> one: day-ahead prices are known only one day in advance, and that is all the planner needs — it looks 24 hours ahead.</p>
+      <h3>Two highlighted days, and every day of 2025</h3>
+      <p>The two buttons are the hard cases, not an average. <b>20 January 2025</b> was a <i>Dunkelflaute</i> — little wind and sun, a 583 €/MWh evening peak — exactly when German grid operators are most likely to reduce heat pumps and chargers. <b>6 April 2025</b> had deeply negative prices at midday, the situation feed-in limits exist for.</p>
+      <p style="margin-top:8px">Any other day of 2025 can be picked as well: it runs on that day's real prices and measured weather. The section <a href="#year">2025, evening by evening</a> runs all 365 evenings for a feeder of 20 depots. That is <i>simulating a past year</i>, not <i>forecasting</i> one: day-ahead prices are known only one day in advance, and that is all the planner needs — it looks 24 hours ahead.</p>
     </div>
   </section>
 

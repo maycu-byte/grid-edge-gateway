@@ -1,6 +1,7 @@
 import init, { Demo, feeder_site, feeder_meta } from "./pkg/web_demo.js";
 import { LOCALE, UI, KEYS, T } from "./i18n.js";
 import { BLOCKS, EXTRA } from "./blocks.js";
+import { initYear, refreshYear } from "./year.js";
 
 const $ = (s) => document.querySelector(s);
 const SEED = 7;
@@ -13,7 +14,7 @@ const SH = 110;                   // height of the small charts
 const SAMPLE_S = 60;              // chart resolution, simulated seconds
 
 let demo, history, lastSample, speed = 300, playing = true, lastFrameT = null, state, plan = null;
-let country = "DE", season = "winter", strategy = "mpc", lastHour = 6;
+let country = "DE", season = "2025-01-20", strategy = "mpc", lastHour = 6;
 const faults = new Set();
 
 // ---------- language ----------
@@ -60,10 +61,11 @@ function applyLanguage(v) {
   document.querySelectorAll("[data-i18n-html]").forEach((e) => { e.innerHTML = KEYS[v][e.dataset.i18nHtml] ?? keyEn.get(e); });
   document.querySelectorAll("#log .d-dso").forEach((e) => { e.textContent = L.dsoToSite; });
   document.querySelectorAll("#log .d-site").forEach((e) => { e.textContent = L.siteToDso; });
-  if (state) { countryTexts(); render(); }
+  if (state) { countryTexts(); render(); fitCharts(); }
   syncCalc();
   if (calcRows.length) renderCompare();
   if (shown) { renderFeederKpis(shown.s, shown.m); drawAnim(); }
+  refreshYear();
 }
 
 // Numbers in the reader's locale: 1.5 / 1,5 and 1,000 / 1.000.
@@ -94,6 +96,9 @@ function start(hour, opts = {}) {
   press("#emergency-seg", "off");
   press("#country-seg", country);
   press("#season-seg", season);
+  const button = document.querySelector(`#season-seg button[data-v="${season}"]`);
+  $("#day-pick").classList.toggle("on", season.startsWith("2025") && !button);
+  if (season.startsWith("2025")) $("#day-pick").value = season;
   press("#strategy-seg", strategy);
   countryTexts();
   $("#log").replaceChildren();
@@ -101,6 +106,7 @@ function start(hour, opts = {}) {
   $("#play").textContent = "❚❚";
   $("#play").setAttribute("aria-label", "Pause");
   tick(0);
+  fitCharts();
 }
 
 function press(sel, v) {
@@ -118,6 +124,7 @@ function wire() {
   onSeg("#lang-seg", applyLanguage);
   onSeg("#country-seg", (v) => start(lastHour, { country: v }));
   onSeg("#season-seg", (v) => start(lastHour, { season: v }));
+  $("#day-pick").addEventListener("change", (e) => { if (e.target.value) start(lastHour, { season: e.target.value }); });
   onSeg("#strategy-seg", (v) => {
     strategy = v;
     demo.set_strategy(v);
@@ -357,24 +364,30 @@ function planPoints(values, offset = 0) {
   return pts;
 }
 
-// On a wide screen the drawings get wider instead of taller.
-// Next to the side column, the power chart also grows to end level with it.
+// On a wide screen the drawings get wider instead of taller. Next to the
+// side column, the four charts together grow to end level with it. Run on
+// load, scene, language and resize only: the side column's text changes
+// every frame, and following it would make the charts jump between sizes.
+const SVG_HEIGHT = H + 3 * SH;    // the four charts' drawing heights together
 function fitCharts() {
   const charts = $("#charts"), side = $(".main .side"), chart = $("#chart");
-  let px = CHART_PX;
+  const cw = chart.clientWidth;
+  if (!cw) return;
+  let w = Math.round(cw * H / CHART_PX);
   if (side.offsetTop === charts.offsetTop) {
-    const rest = charts.offsetHeight - chart.getBoundingClientRect().height;
-    px = Math.min(640, Math.max(CHART_PX, side.offsetHeight - rest));
+    // everything in the panel that is not a chart keeps its height
+    const fixed = charts.offsetHeight - SVG_HEIGHT * cw / W;
+    const room = side.offsetHeight - fixed;
+    if (room > 0) w = Math.round(SVG_HEIGHT * cw / room);
+    w = Math.min(Math.round(cw * H / CHART_PX), Math.max(Math.round(cw * H / 640), w));
   }
-  const w = Math.max(480, Math.round(chart.clientWidth * H / px));
-  if (Math.abs(w - W) < 8) return;
-  W = w;
+  W = Math.max(480, w);
   $("#chart").setAttribute("viewBox", `0 0 ${W} ${H}`);
   for (const id of ["#price-chart", "#soc-chart", "#temp-chart"]) $(id).setAttribute("viewBox", `0 0 ${W} ${SH}`);
+  if (state) drawCharts();
 }
 
 function drawCharts() {
-  fitCharts();
   drawPower();
   drawPrice();
   drawSoc();
@@ -416,9 +429,9 @@ function drawPower() {
 }
 
 function drawPrice() {
-  const lo = -150, hi = 600, yp = (v) => yk(v, lo, hi, SH);
+  const lo = -300, hi = 600, yp = (v) => yk(v, lo, hi, SH);
   const parts = [];
-  for (const v of [0, 300, 600]) {
+  for (const v of [-300, 0, 300, 600]) {
     parts.push(`<line x1="${M.l}" x2="${W - M.r}" y1="${yp(v)}" y2="${yp(v)}" stroke="${css(v === 0 ? "--ink3" : "--hair")}" stroke-width="${v === 0 ? 1 : 0.6}"/>`);
     parts.push(`<text x="${M.l - 6}" y="${yp(v) + 4}" text-anchor="end">${v}</text>`);
   }
@@ -584,7 +597,7 @@ function calcSettings() {
     sites: Number($("#c-sites").value),
     cap: Number($("#c-cap").value),
     fleet: pressedIn("#c-fleet"),
-    season: pressedIn("#c-season"),
+    season: $("#c-day-pick").classList.contains("on") ? $("#c-day-pick").value : pressedIn("#c-season"),
     dur: Number(pressedIn("#c-dur")),
     release: pressedIn("#c-release"),
     groups: Number(pressedIn("#c-groups")),
@@ -751,7 +764,7 @@ function drawFeeder(s, run, base, m, k) {
   const meta = FEEDER_META;
   // A narrower drawing on phones keeps the text readable.
   const cw = $("#c-chart").clientWidth;
-  const w = cw < 520 ? 420 : Math.max(760, Math.round(cw * 260 / 330)), h = 260, mg = { l: 48, r: 12, t: 12, b: 28 };
+  const w = cw < 520 ? 420 : Math.max(760, Math.round(cw * 260 / 330)), h = 260, mg = { l: 48, r: 24, t: 12, b: 28 };
   $("#c-chart").setAttribute("viewBox", `0 0 ${w} ${h}`);
   const n = run.load.length, t0 = meta.from_h, dt = meta.sample_s / 3600;
   const hi = Math.ceil(Math.max(m.cap * 1.15, ...run.load, ...base.load) / 100) * 100;
@@ -824,6 +837,12 @@ function wireCalculator() {
   for (const sel of ["#c-fleet", "#c-season", "#c-dur", "#c-release", "#c-groups", "#c-ctl"]) {
     onSeg(sel, (v) => press(sel, v));
   }
+  onSeg("#c-season", () => $("#c-day-pick").classList.remove("on"));
+  $("#c-day-pick").addEventListener("change", (e) => {
+    if (!e.target.value) return;
+    e.target.classList.add("on");
+    press("#c-season", "");
+  });
   $("#c-sites").addEventListener("input", syncCalc);
   $("#c-cap").addEventListener("input", syncCalc);
   syncCalc();
@@ -869,7 +888,7 @@ function wireSidebar() {
   };
   addEventListener("scroll", mark, { passive: true });
   mark();
-  addEventListener("resize", () => { if (state) drawCharts(); if (shown) drawAnim(); mark(); });
+  addEventListener("resize", () => { fitCharts(); if (shown) drawAnim(); mark(); });
 }
 
 await init();
@@ -880,4 +899,33 @@ wireCalculator();
 wireSidebar();
 applyLanguage(pickLanguage());
 if (!scripted()) start(6);
+document.fonts?.ready.then(fitCharts);
+initYear({
+  L: () => L,
+  nf,
+  css,
+  press,
+  onSeg,
+  locale: () => LOCALE[lang],
+  // An evening of the year in the calculator: the study's feeder on that day.
+  openInCalculator(date, cap, ctl) {
+    $("#c-day-pick").value = date;
+    $("#c-day-pick").classList.add("on");
+    press("#c-season", "");
+    $("#c-sites").value = "20";
+    $("#c-cap").value = String(cap);
+    press("#c-fleet", "mixed");
+    press("#c-ctl", ctl);
+    press("#c-release", "ramp");
+    press("#c-groups", "1");
+    press("#c-dur", "2");
+    syncCalc();
+    $("#calculator").scrollIntoView({ behavior: "smooth" });
+    calculate([calcSettings()]);
+  },
+  openInDemo(date, ctl) {
+    start(16.25, { season: date, strategy: ctl });
+    $("#demo").scrollIntoView({ behavior: "smooth" });
+  },
+});
 requestAnimationFrame(loop);

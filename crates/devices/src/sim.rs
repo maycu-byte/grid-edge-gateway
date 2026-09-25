@@ -400,7 +400,7 @@ impl SiteSim {
 
     /// PV available from the sun (before any limit), fraction of installed power.
     pub fn solar_fraction(&self) -> f64 {
-        self.climate.clear_sky_fraction(self.t_s) * self.cloud
+        self.climate.solar_fraction(self.t_s, self.cloud)
     }
 
     /// Current cloudiness factor (1 = clear sky).
