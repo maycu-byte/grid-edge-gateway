@@ -123,6 +123,8 @@ export const EXTRA = {
 EXTRA.pt["What is simulated?"] = "O que é simulado?";
 EXTRA.pt["Live demo"] = "Demonstração ao vivo";
 EXTRA.pt["Data sources"] = "Fontes dos dados";
+EXTRA.pt["2025, day by day"] = "2025, dia a dia";
+EXTRA.de["2025, day by day"] = "2025, Tag für Tag";
 
 // Context, the calculator's reading guide and the data sources.
 const SW = (c) => `<span class="sw" style="background:var(${c})"></span>`;
@@ -141,20 +143,21 @@ Object.assign(BLOCKS.pt, {
     <div class="scroll"><table>
       <thead><tr><th>Dado</th><th>O que é usado</th><th>Fonte</th><th>Tipo</th></tr></thead>
       <tbody>
-        <tr><td>Preços da energia</td><td>Preços horários do mercado do dia seguinte da zona Alemanha–Luxemburgo para 20–22 de janeiro de 2025 (pico de 583 €/MWh às 17:00) e 6–8 de abril de 2025 (−115 €/MWh às 14:00)</td><td>SMARD.de (Bundesnetzagentur), zona DE-LU · <code>devices/src/prices_data.rs</code></td><td class="tag-real">real · Alemanha</td></tr>
+        <tr><td>Preços da energia</td><td>Preços horários do mercado do dia seguinte da zona Alemanha–Luxemburgo para todas as horas de 2025 (a partir de 1º de outubro, a média dos quatro produtos de 15 minutos); os dois dias em destaque são 20 de janeiro (pico de 583 €/MWh às 17:00) e 6 de abril (−115 €/MWh às 14:00)</td><td>SMARD.de (Bundesnetzagentur), zona DE-LU, CC BY 4.0, pela API do Energy-Charts · <code>devices/src/year2025_data.rs</code></td><td class="tag-real">real · Alemanha</td></tr>
         <tr><td>Regras de redução</td><td>Potência mínima Pmin,14a = 4,2 kW por equipamento, fator de simultaneidade, retorno gradual em 5 minutos, comprovação de cumprimento</td><td>Decisão BNetzA BK6-22-300, Anexo 1 (§14a EnWG)</td><td class="tag-real">real · Alemanha</td></tr>
         <tr><td>Regras de injeção</td><td>Limite de 60% para sistemas novos sem medidor inteligente; sem pagamento em horas de preço negativo</td><td>Solarspitzengesetz 2025; EEG §51</td><td class="tag-real">real · Alemanha</td></tr>
         <tr><td>Áustria e Suíça</td><td>Limite de injeção de 70%; orçamento de corte gratuito de 3%; contratos de flexibilidade</td><td>ElWG (BGBl. I 91/2025); StromVG art. 17c, StromVV art. 19b–19d</td><td class="tag-real">real · AT / CH</td></tr>
-        <tr><td>Sol e temperatura</td><td>Curva solar de céu limpo e temperatura diária do sudoeste da Alemanha, com nebulosidade sorteada por dia (ensolarado, misto, nublado)</td><td>Modelo em <code>devices/src/climate.rs</code>, parâmetros definidos à mão</td><td class="tag-syn">modelado</td></tr>
+        <tr><td>Sol e temperatura, qualquer dia de 2025</td><td>Temperatura do ar e irradiação global horárias medidas em Stuttgart; produção solar = irradiação × 0,85</td><td>Arquivo histórico do Open-Meteo (reanálise ERA5, Copernicus/ECMWF), CC BY 4.0 · <code>devices/src/year2025_data.rs</code></td><td class="tag-real">real · Alemanha</td></tr>
+        <tr><td>Sol e temperatura, os dois dias do estudo</td><td>Curva solar de céu limpo e temperatura diária do sudoeste da Alemanha, com nebulosidade sorteada por dia (ensolarado, misto, nublado) — usada nos estudos de Monte Carlo e de retorno</td><td>Modelo em <code>devices/src/climate.rs</code>, parâmetros definidos à mão</td><td class="tag-syn">modelado</td></tr>
         <tr><td>Vans</td><td>Horário de chegada, energia pedida e horas conectada de cada van; "horários variados" desloca cada depósito em até ±1 h e ±30% de energia</td><td>Modelo em <code>devices/src/sim.rs</code> e <code>closedloop/src/feeder.rs</code></td><td class="tag-syn">modelado</td></tr>
         <tr><td>Prédio e outras cargas</td><td>Modelo térmico de primeira ordem do prédio; 10–40 kW de outros consumos</td><td>Modelo em <code>devices/src/sim.rs</code></td><td class="tag-syn">modelado</td></tr>
         <tr><td>Tarifa</td><td>Preço do dia seguinte + 12 ct/kWh de tarifas de rede e encargos; tarifa de demanda de 100 €/kW por ano</td><td>Valores ilustrativos, da ordem das tarifas comerciais alemãs</td><td class="tag-syn">suposto</td></tr>
       </tbody>
     </table></div>
     <div class="data-note">
-      <h3>Por que só dois dias? Dá para rodar um ano inteiro?</h3>
-      <p>Os dois dias são os casos difíceis, não uma média. <b>20 de janeiro de 2025</b> foi uma <i>Dunkelflaute</i> — pouco vento e pouco sol, pico de 583 €/MWh à noite —, justamente quando as distribuidoras alemãs mais tendem a reduzir bombas de calor e carregadores. <b>6 de abril de 2025</b> teve preços muito negativos ao meio-dia, a situação para a qual existem os limites de injeção. Cada dia é simulado segundo a segundo com o código real de controle, o que mantém a página rápida.</p>
-      <p style="margin-top:8px">Um ano inteiro é possível: o SMARD publica todas as horas do ano, e o gateway já busca preços da ENTSO-E e do Energy-Charts. Para um ano, faltam clima real (por exemplo do serviço meteorológico alemão, DWD, ou do PVGIS) e um ano de horários das vans. Isso é <i>simular um ano passado</i>, não <i>prever</i> um ano: os preços do dia seguinte só são conhecidos com um dia de antecedência, e é só disso que o planejador precisa — ele olha 24 horas à frente.</p>
+      <h3>Dois dias em destaque, e todos os dias de 2025</h3>
+      <p>Os dois botões são os casos difíceis, não uma média. <b>20 de janeiro de 2025</b> foi uma <i>Dunkelflaute</i> — pouco vento e pouco sol, pico de 583 €/MWh à noite —, justamente quando as distribuidoras alemãs mais tendem a reduzir bombas de calor e carregadores. <b>6 de abril de 2025</b> teve preços muito negativos ao meio-dia, a situação para a qual existem os limites de injeção.</p>
+      <p style="margin-top:8px">Qualquer outro dia de 2025 também pode ser escolhido: ele roda com os preços reais e o clima medido daquele dia. A seção <a href="#year">2025, noite a noite</a> roda as 365 noites para um alimentador de 20 depósitos. Isso é <i>simular um ano passado</i>, não <i>prever</i> um ano: os preços do dia seguinte só são conhecidos com um dia de antecedência, e é só disso que o planejador precisa — ele olha 24 horas à frente.</p>
     </div>`,
 });
 Object.assign(BLOCKS.de, {
@@ -172,19 +175,20 @@ Object.assign(BLOCKS.de, {
     <div class="scroll"><table>
       <thead><tr><th>Daten</th><th>Was verwendet wird</th><th>Quelle</th><th>Art</th></tr></thead>
       <tbody>
-        <tr><td>Strompreise</td><td>Stündliche Day-Ahead-Preise der Gebotszone Deutschland–Luxemburg für den 20.–22. Januar 2025 (Spitze 583 €/MWh um 17:00) und den 6.–8. April 2025 (−115 €/MWh um 14:00)</td><td>SMARD.de (Bundesnetzagentur), Gebotszone DE-LU · <code>devices/src/prices_data.rs</code></td><td class="tag-real">echt · Deutschland</td></tr>
+        <tr><td>Strompreise</td><td>Stündliche Day-Ahead-Preise der Gebotszone Deutschland–Luxemburg für jede Stunde 2025 (ab 1. Oktober der Mittelwert der vier 15-Minuten-Produkte); hervorgehoben sind der 20. Januar (Spitze 583 €/MWh um 17:00) und der 6. April (−115 €/MWh um 14:00)</td><td>SMARD.de (Bundesnetzagentur), Gebotszone DE-LU, CC BY 4.0, über die Energy-Charts-API · <code>devices/src/year2025_data.rs</code></td><td class="tag-real">echt · Deutschland</td></tr>
         <tr><td>Regeln für das Dimmen</td><td>Mindestleistung Pmin,14a = 4,2 kW je Gerät, Gleichzeitigkeitsfaktor, schrittweise Freigabe über 5 Minuten, Nachweis</td><td>BNetzA-Festlegung BK6-22-300, Anlage 1 (§14a EnWG)</td><td class="tag-real">echt · Deutschland</td></tr>
         <tr><td>Einspeiseregeln</td><td>60-%-Grenze für Neuanlagen ohne Smart Meter; keine Vergütung in Stunden mit negativen Preisen</td><td>Solarspitzengesetz 2025; EEG §51</td><td class="tag-real">echt · Deutschland</td></tr>
         <tr><td>Österreich und Schweiz</td><td>70-%-Einspeisegrenze; 3 % kostenloses Abregelungsbudget; Flexibilitätsverträge</td><td>ElWG (BGBl. I 91/2025); StromVG Art. 17c, StromVV Art. 19b–19d</td><td class="tag-real">echt · AT / CH</td></tr>
-        <tr><td>Sonne und Temperatur</td><td>Solarkurve bei klarem Himmel und Tagestemperatur für Südwestdeutschland, mit zufälliger Bewölkung je Tag (sonnig, gemischt, bedeckt)</td><td>Modell in <code>devices/src/climate.rs</code>, Parameter von Hand gesetzt</td><td class="tag-syn">modelliert</td></tr>
+        <tr><td>Sonne und Temperatur, jeder Tag 2025</td><td>Stündlich gemessene Lufttemperatur und Globalstrahlung in Stuttgart; PV-Leistung = Strahlung × 0,85</td><td>Historisches Archiv von Open-Meteo (ERA5-Reanalyse, Copernicus/ECMWF), CC BY 4.0 · <code>devices/src/year2025_data.rs</code></td><td class="tag-real">echt · Deutschland</td></tr>
+        <tr><td>Sonne und Temperatur, die zwei Studientage</td><td>Solarkurve bei klarem Himmel und Tagestemperatur für Südwestdeutschland, mit zufälliger Bewölkung je Tag (sonnig, gemischt, bedeckt) — für die Monte-Carlo- und die Nachholeffekt-Studie</td><td>Modell in <code>devices/src/climate.rs</code>, Parameter von Hand gesetzt</td><td class="tag-syn">modelliert</td></tr>
         <tr><td>Lieferwagen</td><td>Ankunftszeit, gewünschte Energie und Standzeit je Fahrzeug; „unterschiedlich“ verschiebt jedes Depot um bis zu ±1 h und ±30 % Energie</td><td>Modell in <code>devices/src/sim.rs</code> und <code>closedloop/src/feeder.rs</code></td><td class="tag-syn">modelliert</td></tr>
         <tr><td>Gebäude und übrige Lasten</td><td>Thermisches Modell erster Ordnung; 10–40 kW sonstiger Verbrauch</td><td>Modell in <code>devices/src/sim.rs</code></td><td class="tag-syn">modelliert</td></tr>
         <tr><td>Tarif</td><td>Day-Ahead-Preis + 12 ct/kWh Netzentgelte und Umlagen; Leistungspreis 100 €/kW im Jahr</td><td>Beispielwerte in der Größenordnung deutscher Gewerbetarife</td><td class="tag-syn">angenommen</td></tr>
       </tbody>
     </table></div>
     <div class="data-note">
-      <h3>Warum nur zwei Tage? Geht auch ein ganzes Jahr?</h3>
-      <p>Die beiden Tage sind die schwierigen Fälle, kein Durchschnitt. Der <b>20. Januar 2025</b> war eine <i>Dunkelflaute</i> — wenig Wind und Sonne, eine Abendspitze von 583 €/MWh —, genau dann dimmen deutsche Netzbetreiber am ehesten Wärmepumpen und Ladepunkte. Am <b>6. April 2025</b> waren die Preise mittags stark negativ, der Fall, für den es Einspeisegrenzen gibt. Jeder Tag wird sekundengenau mit dem echten Regelungscode simuliert, das hält die Seite schnell.</p>
-      <p style="margin-top:8px">Ein ganzes Jahr ist möglich: SMARD veröffentlicht jede Stunde des Jahres, und das Gateway holt Preise bereits von ENTSO-E und Energy-Charts. Für ein Jahr braucht es zusätzlich echtes Wetter (etwa vom Deutschen Wetterdienst, DWD, oder PVGIS) und ein Jahr Fahrpläne. Das heißt <i>ein vergangenes Jahr simulieren</i>, nicht <i>ein Jahr vorhersagen</i>: Day-Ahead-Preise sind nur einen Tag im Voraus bekannt, und mehr braucht der Planer nicht — er schaut 24 Stunden voraus.</p>
+      <h3>Zwei hervorgehobene Tage, und jeder Tag 2025</h3>
+      <p>Die beiden Schaltflächen sind die schwierigen Fälle, kein Durchschnitt. Der <b>20. Januar 2025</b> war eine <i>Dunkelflaute</i> — wenig Wind und Sonne, eine Abendspitze von 583 €/MWh —, genau dann dimmen deutsche Netzbetreiber am ehesten Wärmepumpen und Ladepunkte. Am <b>6. April 2025</b> waren die Preise mittags stark negativ, der Fall, für den es Einspeisegrenzen gibt.</p>
+      <p style="margin-top:8px">Jeder andere Tag 2025 lässt sich ebenfalls wählen: er läuft mit den echten Preisen und dem gemessenen Wetter dieses Tages. Der Abschnitt <a href="#year">2025, Abend für Abend</a> rechnet alle 365 Abende für einen Strang mit 20 Depots. Das heißt <i>ein vergangenes Jahr simulieren</i>, nicht <i>ein Jahr vorhersagen</i>: Day-Ahead-Preise sind nur einen Tag im Voraus bekannt, und mehr braucht der Planer nicht — er schaut 24 Stunden voraus.</p>
     </div>`,
 });

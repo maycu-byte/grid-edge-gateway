@@ -23,9 +23,6 @@ const CA: u16 = 1;
 /// Control period in the browser (the gateway uses 1 s; 2 s keeps fast
 /// playback smooth and changes nothing a person can see).
 const CONTROL_DT_S: f64 = 2.0;
-/// Midnight of the simulated first day for CP56Time2a time tags (UTC).
-const SPRING_EPOCH_MS: i64 = 1_743_890_400_000; // 2025-04-06 00:00 CEST
-const WINTER_EPOCH_MS: i64 = 1_737_327_600_000; // 2025-01-20 00:00 CET
 /// Swiss scenario: late in the year most of the free 3% budget is already
 /// used, so a noon curtailment runs it out.
 const CH_CURTAILED_ALREADY_KWH: f64 = 3_400.0;
@@ -223,8 +220,9 @@ fn refusal_name(r: &control::Refusal) -> &'static str {
     }
 }
 
+/// Midnight of the simulated first day for CP56Time2a time tags (UTC).
 fn epoch_ms(season: Season) -> i64 {
-    if season == Season::Winter { WINTER_EPOCH_MS } else { SPRING_EPOCH_MS }
+    season.epoch_ms()
 }
 
 fn new_loop(j: Jurisdiction, season: Season, strategy: Strategy, start_hour: f64, seed: u64) -> ClosedLoop {
@@ -258,7 +256,8 @@ fn new_loop(j: Jurisdiction, season: Season, strategy: Strategy, start_hour: f64
 
 #[wasm_bindgen]
 impl Demo {
-    /// `country`: "DE", "AT" or "CH"; `season`: "spring" or "winter";
+    /// `country`: "DE", "AT" or "CH"; `season`: "spring", "winter" or a
+    /// date of 2025 ("2025-07-14"), simulated on its real prices and weather;
     /// `strategy`: "rules", "mpc" or "mpc-cc".
     #[wasm_bindgen(constructor)]
     pub fn new(start_hour: f64, seed: u32, country: &str, season: &str, strategy: &str) -> Demo {

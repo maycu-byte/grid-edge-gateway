@@ -268,3 +268,91 @@ T.de = {
   reductionLbl: "Reduzierung", transformerLbl: (v) => `Trafo ${v}`,
 };
 void n1;
+
+// Real extreme days of 2025 (buttons of the demo and the calculator).
+const EXTREMES = {
+  pt: { "Dunkelflaute · 20 Jan": "Dunkelflaute · 20 jan", "Negative noon · 11 May": "Meio-dia negativo · 11 mai", "Coldest day · 22 Nov": "Dia mais frio · 22 nov", "Heatwave · 1 Jul": "Onda de calor · 1 jul",
+    "the real extremes of 2025: 583 €/MWh on 20 Jan at 17:00, −250 €/MWh on 11 May at 13:00, −4.2 °C on 22 Nov, 33.5 °C and 476 €/MWh on 1 Jul (SMARD prices, measured weather)": "os extremos reais de 2025: 583 €/MWh em 20 jan às 17:00, −250 €/MWh em 11 mai às 13:00, −4,2 °C em 22 nov, 33,5 °C e 476 €/MWh em 1 jul (preços do SMARD, clima medido)",
+    "2025: highest 583 on 20 Jan at 17:00 · lowest −250 on 11 May at 13:00": "2025: máximo de 583 em 20 jan às 17:00 · mínimo de −250 em 11 mai às 13:00" },
+  de: { "Dunkelflaute · 20 Jan": "Dunkelflaute · 20. Jan.", "Negative noon · 11 May": "Negativer Mittag · 11. Mai", "Coldest day · 22 Nov": "Kältester Tag · 22. Nov.", "Heatwave · 1 Jul": "Hitzewelle · 1. Juli",
+    "the real extremes of 2025: 583 €/MWh on 20 Jan at 17:00, −250 €/MWh on 11 May at 13:00, −4.2 °C on 22 Nov, 33.5 °C and 476 €/MWh on 1 Jul (SMARD prices, measured weather)": "die echten Extreme 2025: 583 €/MWh am 20. Jan. um 17:00, −250 €/MWh am 11. Mai um 13:00, −4,2 °C am 22. Nov., 33,5 °C und 476 €/MWh am 1. Juli (SMARD-Preise, gemessenes Wetter)",
+    "2025: highest 583 on 20 Jan at 17:00 · lowest −250 on 11 May at 13:00": "2025: Höchstwert 583 am 20. Jan. um 17:00 · Tiefstwert −250 am 11. Mai um 13:00" },
+};
+Object.assign(UI.pt, EXTREMES.pt);
+Object.assign(UI.de, EXTREMES.de);
+Object.assign(KEYS.en, { xDunkel: "Dunkelflaute · 20 Jan", xNeg: "Negative noon · 11 May", xCold: "Coldest day · 22 Nov", xHeat: "Heatwave · 1 Jul" });
+Object.assign(KEYS.pt, { xDunkel: EXTREMES.pt["Dunkelflaute · 20 Jan"], xNeg: EXTREMES.pt["Negative noon · 11 May"], xCold: EXTREMES.pt["Coldest day · 22 Nov"], xHeat: EXTREMES.pt["Heatwave · 1 Jul"] });
+Object.assign(KEYS.de, { xDunkel: EXTREMES.de["Dunkelflaute · 20 Jan"], xNeg: EXTREMES.de["Negative noon · 11 May"], xCold: EXTREMES.de["Coldest day · 22 Nov"], xHeat: EXTREMES.de["Heatwave · 1 Jul"] });
+
+// The year view (year.js).
+Object.assign(T.en, {
+  yMonths: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+  yClass: { k0: "no overload, nothing to do", k1: "would overload; the reduction solves it", k2: "the rebound overloads it again after 19:30", k3: "overloads even with the reduction" },
+  yNeed: (c) => `evenings the feeder would overload at ${c} kW per depot, so the grid operator reduces`,
+  yRebound: "of them, the rebound after the release overloads it again",
+  yStill: "of them, it still overloads with the reduction",
+  ySolved: "of them, the reduction solves it",
+  yOther: (o) => `the same with ${o === "mpc" ? "the planner" : "rules only"}: evenings over · rebound evenings`,
+  yTemp: "mean temperature, Stuttgart", ySun: "sun: what 1 kWp of PV could make", yPrice: "day-ahead price 17:00–20:00",
+  yWith: "with the reduction 17:30–19:30", yWithout: "the same evening without it", lgCap: "Transformer capacity",
+  yDayNote: (a, b, p) => `Vans left short, whole feeder: ${a} kWh without the reduction, ${b} kWh with it. Highest load after the release: ${p} kW per depot.`,
+  yOpenCalc: "Open this evening in the calculator", yOpenDemo: "Play this day in the live demo",
+  yPerDepot: "kW per depot", yFailed: "The year's results could not be loaded",
+});
+Object.assign(T.pt, {
+  yMonths: ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"],
+  yClass: { k0: "sem sobrecarga, nada a fazer", k1: "sobrecarregaria; a redução resolve", k2: "o retorno sobrecarrega de novo depois das 19:30", k3: "sobrecarrega mesmo com a redução" },
+  yNeed: (c) => `noites em que o alimentador sobrecarregaria com ${c} kW por depósito, e a distribuidora reduz`,
+  yRebound: "dessas, o retorno depois da liberação sobrecarrega de novo",
+  yStill: "dessas, continua sobrecarregado mesmo com a redução",
+  ySolved: "dessas, a redução resolve",
+  yOther: (o) => `o mesmo ${o === "mpc" ? "com o planejador" : "só com regras"}: noites acima · noites com retorno`,
+  yTemp: "temperatura média, Stuttgart", ySun: "sol: o que 1 kWp de painel produziria", yPrice: "preço do dia seguinte 17:00–20:00",
+  yWith: "com a redução 17:30–19:30", yWithout: "a mesma noite sem ela", lgCap: "Capacidade do transformador",
+  yDayNote: (a, b, p) => `Energia faltando nas vans, alimentador inteiro: ${a} kWh sem a redução, ${b} kWh com ela. Maior carga depois da liberação: ${p} kW por depósito.`,
+  yOpenCalc: "Abrir esta noite na calculadora", yOpenDemo: "Rodar este dia na demonstração",
+  yPerDepot: "kW por depósito", yFailed: "Não foi possível carregar os resultados do ano",
+});
+Object.assign(T.de, {
+  yMonths: ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"],
+  yClass: { k0: "keine Überlast, nichts zu tun", k1: "wäre überlastet; die Reduzierung löst es", k2: "der Nachholeffekt überlastet nach 19:30 erneut", k3: "überlastet trotz Reduzierung" },
+  yNeed: (c) => `Abende, an denen der Strang bei ${c} kW je Depot überlastet wäre und der Netzbetreiber reduziert`,
+  yRebound: "davon überlastet der Nachholeffekt nach der Freigabe erneut",
+  yStill: "davon bleibt er trotz Reduzierung überlastet",
+  ySolved: "davon löst die Reduzierung es",
+  yOther: (o) => `dasselbe ${o === "mpc" ? "mit dem Planer" : "nur mit Regeln"}: Abende über · Abende mit Nachholeffekt`,
+  yTemp: "Mitteltemperatur, Stuttgart", ySun: "Sonne: was 1 kWp PV erzeugen könnte", yPrice: "Day-Ahead-Preis 17:00–20:00",
+  yWith: "mit Reduzierung 17:30–19:30", yWithout: "derselbe Abend ohne", lgCap: "Trafoleistung",
+  yDayNote: (a, b, p) => `Fehlende Ladeenergie, ganzer Strang: ${a} kWh ohne Reduzierung, ${b} kWh mit. Höchste Last nach der Freigabe: ${p} kW je Depot.`,
+  yOpenCalc: "Diesen Abend im Rechner öffnen", yOpenDemo: "Diesen Tag in der Live-Demo abspielen",
+  yPerDepot: "kW je Depot", yFailed: "Die Jahresergebnisse konnten nicht geladen werden",
+});
+Object.assign(KEYS.en, { orAnyDay: "or any day of 2025:" });
+Object.assign(KEYS.pt, {
+  orAnyDay: "ou qualquer dia de 2025:",
+  yTitle: "2025, noite a noite · com que frequência o problema acontece?",
+  yIntro: "Vinte depósitos no mesmo alimentador, simulados em <b>todas as noites de 2025</b> com os preços reais de energia e o clima medido de cada dia. A distribuidora só reduz o consumo nos dias em que o transformador sobrecarregaria. Cada quadrado é um dia: escolha o tamanho do transformador e o controle dos depósitos, depois clique num dia para ver a noite dele.",
+  yCap: "Transformador por depósito", yCtl: "Os depósitos usam",
+  yK0: "sem sobrecarga: nada a fazer", yK1: "sobrecarregaria: a redução resolve", yK2: "o retorno sobrecarrega de novo depois das 19:30", yK3: "sobrecarrega mesmo com a redução",
+  yLoading: "Carregando o ano…",
+});
+Object.assign(KEYS.de, {
+  orAnyDay: "oder ein beliebiger Tag 2025:",
+  yTitle: "2025, Abend für Abend · wie oft tritt das Problem auf?",
+  yIntro: "Zwanzig Depots an einem Strang, simuliert an <b>jedem Abend des Jahres 2025</b> mit den echten Strompreisen und dem gemessenen Wetter des Tages. Der Netzbetreiber reduziert nur an Tagen, an denen der Trafo sonst überlastet wäre. Jedes Quadrat ist ein Tag: Trafogröße und Standortregelung wählen, dann einen Tag anklicken, um seinen Abend zu sehen.",
+  yCap: "Trafo je Depot", yCtl: "Die Depots laufen mit",
+  yK0: "keine Überlast: nichts zu tun", yK1: "wäre überlastet: die Reduzierung löst es", yK2: "der Nachholeffekt überlastet nach 19:30 erneut", yK3: "überlastet trotz Reduzierung",
+  yLoading: "Das Jahr wird geladen…",
+});
+Object.assign(UI.pt, { "or any day:": "ou qualquer dia:" });
+Object.assign(UI.de, { "or any day:": "oder beliebiger Tag:" });
+
+Object.assign(T.en, { yCompare: (o, n, r) => o === "mpc"
+  ? `<b>With the planner</b>, the same year: ${n} evenings over the transformer, ${r} of them overloaded again by the rebound.`
+  : `<b>With rules only</b>, the same year: ${n} evenings over the transformer, ${r} of them overloaded again by the rebound.` });
+Object.assign(T.pt, { yCompare: (o, n, r) => o === "mpc"
+  ? `<b>Com o planejador</b>, o mesmo ano: ${n} noites acima do transformador, ${r} delas sobrecarregadas de novo pelo retorno.`
+  : `<b>Só com regras</b>, o mesmo ano: ${n} noites acima do transformador, ${r} delas sobrecarregadas de novo pelo retorno.` });
+Object.assign(T.de, { yCompare: (o, n, r) => o === "mpc"
+  ? `<b>Mit dem Planer</b>, dasselbe Jahr: ${n} Abende über der Trafoleistung, ${r} davon erneut überlastet durch den Nachholeffekt.`
+  : `<b>Nur mit Regeln</b>, dasselbe Jahr: ${n} Abende über der Trafoleistung, ${r} davon erneut überlastet durch den Nachholeffekt.` });

@@ -4,7 +4,7 @@
 
 **[Open the live demo →](https://maycu-byte.github.io/grid-edge-gateway/)** The demo runs this code in your browser, compiled to WebAssembly — the planner's quadratic program included. You play the grid operator: pick the country, the day and the controller, send the commands and watch the site respond, frame by frame, next to a copy of the same site running on rules alone.
 
-**Feeder calculator.** Below the demo, a calculator answers the question the rebound study asks: when a §14a reduction ends for many sites at once, which way of bringing them back is most viable? Pick the number of sites, the transformer, identical or different van timetables, the day, the length of the reduction, the release policy (at once, the German 5-minute ramp, a random wait of up to 10 or 30 minutes, a 30-minute ramp, release in groups) and the site controller. The page simulates every site with the same code as the study (`closedloop::feeder`) and the same evening without a reduction, then reports the peak after the release, minutes over the transformer, the rebound, the energy pushed later and the energy the vans are left without, and marks the most viable option. With the defaults, every rule-based release brings the transformer back to overload, a slower restart only makes the rise gentler, and the price-aware planner stays at half the transformer with every van charged. The evening then plays back minute by minute: the feeder curve, the release phase, a gauge against the transformer and one square per site, with play, speed and a time slider.
+**Feeder calculator.** Below the demo, a calculator answers the question the rebound study asks: when a §14a reduction ends for many sites at once, which way of bringing them back is most viable? Pick the number of sites, the transformer, identical or different van timetables, the day, the length of the reduction, the release policy (at once, the German 5-minute ramp, a random wait of up to 10 or 30 minutes, a 30-minute ramp, release in groups) and the site controller. The page simulates every site with the same code as the study (`closedloop::feeder`) and the same evening without a reduction, then reports the peak after the release, minutes over the transformer, the rebound, the energy pushed later and the energy the vans are left without, and marks the most viable option. The day can be one of 2025's real extremes — the Dunkelflaute of 20 January (583 €/MWh), the negative noon of 11 May (−250 €/MWh), the coldest day (22 November) and the heatwave of 1 July — or any other date of 2025, simulated on its real prices and weather. With the defaults, every rule-based release brings the transformer back to overload, a slower restart only makes the rise gentler, and the price-aware planner stays at half the transformer with every van charged. The evening then plays back minute by minute: the feeder curve, the release phase, a gauge against the transformer and one square per site, with play, speed and a time slider.
 
 The page is available in English, Portuguese and German (switch at the top right; it follows the browser language by default). A sidebar leads to each section; a first section explains what is simulated, and a data-sources section lists what is real (German day-ahead prices from SMARD, the BNetzA and national rules) and what is modelled (weather, vans, building, tariff), and why the demo uses two representative days.
 
@@ -148,7 +148,7 @@ Without prices, or with a plan older than an hour, the site runs on rules alone.
 
 ## Testing
 
-- **157 Rust tests.** They cover:
+- **159 Rust tests.** They cover:
   - protocol frames checked against reference octets, every link-layer timer and window, sequence-number wrap-around;
   - the Pmin formula for several device mixes, allocation scenarios, each country's rules, day and year roll-over of the totals, the battery, plausibility checks, ramps and config validation;
   - three property tests over 45,000 random site states and plans. While dimmed, in every country, with a battery and whatever the plan says, the loads never get more than the floor + PV surplus + battery discharge. Every charger current is 0 or 6–32 A in whole amps;
@@ -170,7 +170,7 @@ Without prices, or with a plan older than an hour, the site runs on rules alone.
   - the planner in the running gateway: it moves the overnight vans' charging to cheap hours, and the Pmin floor holds when the DSO dims;
   - two dimmings leaving two chained reports on disk and at `/api/reports`, and an inverter that ignores its limit being reported over IEC 104;
   - TLS acceptance and rejection.
-- **77 browser checks** of the live page with Playwright, in English, Portuguese and German at 1366 px, 1920 px (dark mode) and 390 px: nothing left untranslated, no horizontal scroll, the calculator's output and its minute-by-minute playback (clock, one square per site, time slider), the height difference between side-by-side columns, switching language while the demo runs, no console errors. They were run by hand for this version; CI does not run them yet.
+- **88 browser checks** of the live page with Playwright, in English, Portuguese and German at 1366 px, 1920 px (dark mode) and 390 px: nothing left untranslated, no horizontal scroll, the calculator's output and its minute-by-minute playback (clock, one square per site, time slider), the height difference between side-by-side columns, switching language while the demo runs, any day of 2025 in the demo and the calculator, the year calendar (365 days, transformer sizes, the planner view, a day's evening, opening it in the calculator), no console errors. They were run by hand for this version; CI does not run them yet.
 - CI runs `fmt`, `clippy -D warnings`, all tests and the interop suite on every push, then builds the WebAssembly demo and deploys it to GitHub Pages.
 
 ## Run it locally
@@ -214,6 +214,13 @@ The rebound study behind the feeder calculator (20 sites × 10 days × 33 cases:
 
 ```sh
 cargo run --release -p closedloop --bin rebound -- --sites 20 --reps 10     # → docs/study/rebound
+```
+
+Every evening of 2025 on its real data — SMARD day-ahead prices and measured weather for Stuttgart (Open-Meteo, ERA5), see [docs/study/year2025](docs/study/year2025/README.md) — for a feeder of 20 depots, rules and planner, with and without the reduction (about 1.5 hours on 12 cores):
+
+```sh
+cargo run --release -p closedloop --bin year -- --sites 20                  # → docs/study/year2025
+cp docs/study/year2025/year.json web/year2025.json                          # the demo's calendar
 ```
 
 The planner study (a few minutes on a laptop):

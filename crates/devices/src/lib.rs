@@ -7,6 +7,7 @@ pub mod maps;
 mod prices_data;
 pub mod sim;
 pub mod sunspec;
+mod year2025_data;
 
 /// Three-phase power at 230 V per phase, kW, for a current per phase in A.
 pub fn three_phase_kw(current_a: f64) -> f64 {

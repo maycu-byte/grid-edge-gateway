@@ -4,30 +4,96 @@
 //! 2025 with deeply negative midday prices, and a January 2025 *Dunkelflaute*
 //! (little wind and sun) with a 583 €/MWh evening peak — the situation in
 //! which German DSOs are most likely to dim heat pumps and chargers.
+//!
+//! Any day of 2025 can also be simulated on its real data: the day-ahead
+//! prices of that day and the measured sun and temperature of Stuttgart
+//! (`year2025_data`).
 
 use crate::prices_data::{SPRING_EUR_MWH, WINTER_EUR_MWH};
+use crate::year2025_data::{GHI_W_M2, PRICE_EUR_MWH, TEMP_C};
+
+/// Days in each month of 2025.
+const MONTH_DAYS: [u16; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+/// Days of 2025 (0 = 1 January) whose local midnight is in summer time (CEST):
+/// 31 March to 26 October.
+const CEST_DAYS: std::ops::RangeInclusive<u16> = 89..=298;
+/// Unix time of 1 January 2025, 00:00 CET, ms.
+const EPOCH_2025_MS: i64 = 1_735_686_000_000;
+/// Site latitude and longitude (Stuttgart), degrees.
+const LAT_DEG: f64 = 48.78;
+const LON_DEG: f64 = 9.18;
+/// Share of the horizontal irradiance the rooftop PV turns into AC power
+/// (performance ratio, per 1000 W/m²).
+const PERFORMANCE_RATIO: f64 = 0.85;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Season {
     Spring,
     Winter,
+    /// A real day of 2025, 0 = 1 January.
+    Day(u16),
 }
 
 impl Season {
+    /// "spring", "winter" or a date of 2025 such as "2025-01-20".
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "spring" => Some(Season::Spring),
             "winter" => Some(Season::Winter),
-            _ => None,
+            d => Self::parse_date(d),
         }
+    }
+
+    fn parse_date(s: &str) -> Option<Self> {
+        let mut it = s.split('-');
+        let (y, m, d) = (it.next()?, it.next()?.parse::<u16>().ok()?, it.next()?.parse::<u16>().ok()?);
+        if y != "2025" || it.next().is_some() || !(1..=12).contains(&m) || d == 0 || d > MONTH_DAYS[m as usize - 1] {
+            return None;
+        }
+        Some(Season::Day(MONTH_DAYS[..m as usize - 1].iter().sum::<u16>() + d - 1))
     }
 
     pub fn name(self) -> &'static str {
         match self {
             Season::Spring => "spring",
             Season::Winter => "winter",
+            Season::Day(_) => "2025",
         }
     }
+
+    /// "spring", "winter" or the date, e.g. "2025-01-20".
+    pub fn label(self) -> String {
+        match self {
+            Season::Day(d) => {
+                let (m, day) = month_day(d);
+                format!("2025-{:02}-{:02}", m + 1, day + 1)
+            }
+            s => s.name().to_string(),
+        }
+    }
+
+    /// Unix time of local midnight of the simulated day 0, ms.
+    pub fn epoch_ms(self) -> i64 {
+        match self {
+            Season::Spring => 1_743_890_400_000, // 2025-04-06 00:00 CEST
+            Season::Winter => 1_737_327_600_000, // 2025-01-20 00:00 CET
+            Season::Day(d) => {
+                let summer = if CEST_DAYS.contains(&d) { 3_600_000 } else { 0 };
+                EPOCH_2025_MS + d as i64 * 86_400_000 - summer
+            }
+        }
+    }
+}
+
+/// (month 0–11, day of month 0–30) of a day of 2025.
+fn month_day(mut d: u16) -> (usize, u16) {
+    for (m, &n) in MONTH_DAYS.iter().enumerate() {
+        if d < n {
+            return (m, d);
+        }
+        d -= n;
+    }
+    (11, 30)
 }
 
 /// Sun and temperature of a season in south-west Germany (local time).
@@ -46,6 +112,8 @@ pub struct Climate {
     pub cloud_mean: f64,
     pub cloud_std: f64,
     pub cloud_worst: f64,
+    /// A real day of 2025: sun, temperature and prices come from the data.
+    pub actual_day: Option<u16>,
 }
 
 impl Climate {
@@ -64,6 +132,7 @@ impl Climate {
                 cloud_mean: 0.675,
                 cloud_std: 0.261,
                 cloud_worst: 0.2,
+                actual_day: None,
             },
             // Sunny 25% U(0.85, 1.0), mixed 30% U(0.5, 0.8), overcast 45% U(0.15, 0.4).
             Season::Winter => Climate {
@@ -77,7 +146,59 @@ impl Climate {
                 cloud_mean: 0.55,
                 cloud_std: 0.278,
                 cloud_worst: 0.15,
+                actual_day: None,
             },
+            Season::Day(d) => Self::of_day(d),
+        }
+    }
+
+    /// A real day: the sun's path at the site, the cloudiness climatology of
+    /// the half-year (for the forecaster), measured weather for the rest.
+    fn of_day(d: u16) -> Self {
+        let (month, _) = month_day(d);
+        let base = Self::of(if (3..=8).contains(&month) { Season::Spring } else { Season::Winter });
+        let n = d as f64 + 1.0;
+        let decl = (-23.44f64).to_radians() * (std::f64::consts::TAU * (n + 10.0) / 365.0).cos();
+        let lat = LAT_DEG.to_radians();
+        let half_day_h = (-lat.tan() * decl.tan()).clamp(-1.0, 1.0).acos().to_degrees() / 15.0;
+        // Solar noon on the local clock: longitude, and an hour later in summer time.
+        let summer = if (88..=297).contains(&d) { 1.0 } else { 0.0 };
+        let noon_h = 12.0 + (15.0 - LON_DEG) / 15.0 + summer;
+        let elevation = (90.0 - LAT_DEG).to_radians() + decl;
+        let hours = (d as usize * 24..d as usize * 24 + 24).map(|i| TEMP_C[i] as f64);
+        let (lo, hi) = hours.fold((f64::MAX, f64::MIN), |(a, b), t| (a.min(t), b.max(t)));
+        Climate {
+            season: Season::Day(d),
+            sunrise_h: noon_h - half_day_h,
+            sunset_h: noon_h + half_day_h,
+            // Clear-sky horizontal irradiance ~ 1100 W/m² · sin(elevation)^1.15.
+            clear_peak: PERFORMANCE_RATIO * 1.1 * elevation.sin().powf(1.15),
+            t_mean_c: (lo + hi) / 2.0,
+            t_amp_c: (hi - lo) / 2.0,
+            actual_day: Some(d),
+            ..base
+        }
+    }
+
+    /// Index into the 2025 series and the fraction towards the next hour,
+    /// for hourly means centred on the half hour.
+    fn hour_at(d: u16, t_s: f64) -> (usize, usize, f64) {
+        let x = (d as f64 * 24.0 + t_s / 3600.0 - 0.5).clamp(0.0, (PRICE_EUR_MWH.len() - 1) as f64);
+        let i = x.floor() as usize;
+        (i, (i + 1).min(PRICE_EUR_MWH.len() - 1), x - i as f64)
+    }
+
+    /// PV available from the sun, fraction of installed power, with the
+    /// simulator's cloudiness `cloud` (ignored on a real day: the measured
+    /// irradiance already has its clouds).
+    pub fn solar_fraction(&self, t_s: f64, cloud: f64) -> f64 {
+        match self.actual_day {
+            Some(d) => {
+                let (i, j, f) = Self::hour_at(d, t_s);
+                let ghi = GHI_W_M2[i] as f64 * (1.0 - f) + GHI_W_M2[j] as f64 * f;
+                (ghi / 1000.0 * PERFORMANCE_RATIO).clamp(0.0, 1.0)
+            }
+            None => self.clear_sky_fraction(t_s) * cloud,
         }
     }
 
@@ -93,6 +214,10 @@ impl Climate {
     }
 
     pub fn outdoor_c(&self, t_s: f64) -> f64 {
+        if let Some(d) = self.actual_day {
+            let (i, j, f) = Self::hour_at(d, t_s);
+            return TEMP_C[i] as f64 * (1.0 - f) + TEMP_C[j] as f64 * f;
+        }
         let day = (t_s / 3600.0 - self.t_peak_h) / 24.0 * std::f64::consts::TAU;
         self.t_mean_c + self.t_amp_c * day.cos()
     }
@@ -103,6 +228,10 @@ impl Climate {
         let series = match self.season {
             Season::Spring => &SPRING_EUR_MWH,
             Season::Winter => &WINTER_EUR_MWH,
+            Season::Day(d) => {
+                let i = (d as f64 * 24.0 + (t_s / 3600.0).floor()).clamp(0.0, (PRICE_EUR_MWH.len() - 1) as f64);
+                return PRICE_EUR_MWH[i as usize] as f64;
+            }
         };
         let i = (t_s / 3600.0).floor().clamp(0.0, (series.len() - 1) as f64) as usize;
         series[i]
@@ -117,6 +246,8 @@ impl Climate {
             Season::Winter if u < 0.25 => 0.85 + 0.15 * r,
             Season::Winter if u < 0.55 => 0.5 + 0.3 * r,
             Season::Winter => 0.15 + 0.25 * r,
+            // A real day has measured sun; the draw is not used.
+            Season::Day(_) => 1.0,
         }
     }
 }
@@ -168,6 +299,34 @@ mod tests {
         assert_eq!(spring.day_ahead_eur_mwh(14.0 * 3600.0), -114.57);
         let winter = Climate::of(Season::Winter);
         assert_eq!(winter.day_ahead_eur_mwh(17.5 * 3600.0), 583.40);
+    }
+
+    #[test]
+    fn a_real_day_matches_the_two_study_days() {
+        let jan20 = Season::parse("2025-01-20").unwrap();
+        assert_eq!(jan20, Season::Day(19));
+        assert_eq!(jan20.label(), "2025-01-20");
+        assert_eq!(jan20.epoch_ms(), Season::Winter.epoch_ms());
+        assert_eq!(Season::parse("2025-04-06").unwrap().epoch_ms(), Season::Spring.epoch_ms());
+        let w = Climate::of(jan20);
+        assert!((w.day_ahead_eur_mwh(17.5 * 3600.0) - 583.40).abs() < 0.01);
+        let s = Climate::of(Season::parse("2025-04-06").unwrap());
+        assert!((s.day_ahead_eur_mwh(14.5 * 3600.0) + 114.57).abs() < 0.01);
+        assert!(Season::parse("2025-02-29").is_none() && Season::parse("2024-01-01").is_none());
+    }
+
+    #[test]
+    fn a_real_day_has_measured_sun_and_temperature() {
+        let jun = Climate::of(Season::parse("2025-06-21").unwrap());
+        let jan = Climate::of(Season::parse("2025-01-15").unwrap());
+        assert_eq!(jun.solar_fraction(1.0 * 3600.0, 1.0), 0.0, "night");
+        assert!(jun.sunset_h - jun.sunrise_h > 15.5 && jan.sunset_h - jan.sunrise_h < 9.0);
+        assert!(jun.sunset_h > 21.0, "summer time: the sun sets after 21:00");
+        let noon = |c: &Climate| (10..16).map(|h| c.solar_fraction(h as f64 * 3600.0, 0.3)).fold(0.0, f64::max);
+        assert!(noon(&jun) > noon(&jan));
+        assert!(noon(&jun) <= 1.0);
+        let t = |c: &Climate| c.outdoor_c(14.0 * 3600.0);
+        assert!(t(&jun) > t(&jan) + 10.0);
     }
 
     #[test]
