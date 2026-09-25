@@ -1,4 +1,4 @@
-import init, { Demo, feeder_site, feeder_meta } from "./pkg/web_demo.js";
+import init, { Demo, feeder_site, feeder_meta, day_summary_json, year_extremes_json } from "./pkg/web_demo.js";
 import { LOCALE, UI, KEYS, T } from "./i18n.js";
 import { BLOCKS, EXTRA } from "./blocks.js";
 import { initYear, refreshYear } from "./year.js";
@@ -73,7 +73,29 @@ const nf = (v, d = 0) => v.toLocaleString(LOCALE[lang], { minimumFractionDigits:
 
 // ---------- live demo ----------
 
+// Where the prices and the weather of a 2025 day come from, per country.
+const ZONES = { DE: { bzn: "DE-LU", city: "stuttgart" }, AT: { bzn: "AT", city: "vienna" }, CH: { bzn: "CH", city: "zurich" } };
+const EXTREME_DAYS = ["2025-01-20", "2025-05-11", "2025-11-22", "2025-07-01"];
+
+function zoneTexts() {
+  const z = ZONES[country];
+  document.querySelectorAll(".z-bzn").forEach((e) => { e.textContent = z.bzn; });
+  document.querySelectorAll(".z-city").forEach((e) => { e.textContent = L.cities[z.city]; });
+  document.querySelectorAll(".z-country").forEach((e) => { e.textContent = L.countries[country]; });
+  const day = (d) => new Date(`${d}T12:00:00`).toLocaleDateString(LOCALE[lang], { day: "numeric", month: "short" });
+  const [dunkel, neg, cold, heat] = EXTREME_DAYS.map((d) => JSON.parse(day_summary_json(country, d)));
+  $("#day-note").textContent = L.extremesNote(country, {
+    dunkel: L.dayPeak(day(EXTREME_DAYS[0]), `${nf(dunkel.price_max)} €/MWh`, dunkel.price_max_h),
+    neg: L.dayLow(day(EXTREME_DAYS[1]), `${nf(neg.price_min)} €/MWh`, neg.price_min_h),
+    cold: L.dayCold(day(EXTREME_DAYS[2]), `${nf(cold.temp_mean, 1)} °C`),
+    heat: L.dayHot(day(EXTREME_DAYS[3]), `${nf(heat.temp_max, 1)} °C`),
+  });
+  const y = JSON.parse(year_extremes_json(country));
+  $("#price-key").textContent = L.priceKey(z.bzn, nf(y.max), `${day(y.max_date)}, ${y.max_h}:00`, nf(y.min), `${day(y.min_date)}, ${y.min_h}:00`);
+}
+
 function countryTexts() {
+  zoneTexts();
   const info = L.country[country];
   $("#dim-sub").textContent = info.dim;
   $("#floor-text").innerHTML = info.floor;

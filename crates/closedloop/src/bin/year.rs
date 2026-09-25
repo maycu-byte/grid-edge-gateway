@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use closedloop::feeder::{FROM_H, SAMPLE_S};
 use closedloop::{FeederCase, Strategy, run_site};
-use devices::climate::{Climate, Season};
+use devices::climate::{Climate, Season, Zone};
 use serde::Serialize;
 
 const REDUCTION: (f64, f64) = (17.5, 19.5);
@@ -104,7 +104,7 @@ struct DayOut {
 }
 
 fn day_weather(d: u16) -> (f64, f64, f64, f64, f64) {
-    let c = Climate::of(Season::Day(d));
+    let c = Climate::of(Season::Day(d, Zone::De));
     let hours: Vec<f64> = (0..24).map(|h| h as f64 * 3600.0 + 1800.0).collect();
     let temp = hours.iter().map(|&t| c.outdoor_c(t)).sum::<f64>() / 24.0;
     let pv = hours.iter().map(|&t| c.solar_fraction(t, 1.0)).sum::<f64>();
@@ -120,7 +120,7 @@ fn run_day(d: u16, sites: usize) -> DayOut {
     let release = ((REDUCTION.1 - FROM_H) * 3600.0 / SAMPLE_S).round() as usize;
     for &(_, strategy, reduce) in &CASES {
         let case = FeederCase {
-            season: Season::Day(d),
+            season: Season::Day(d, Zone::De),
             strategy: Strategy::parse(strategy).expect("strategy"),
             ramp_s: RAMP_S,
             delay_max_s: 0.0,
@@ -151,7 +151,7 @@ fn run_day(d: u16, sites: usize) -> DayOut {
     let (temp, pv, pmin, pmax, peve) = day_weather(d);
     let mut it = outs.into_iter();
     DayOut {
-        date: Season::Day(d).label(),
+        date: Season::Day(d, Zone::De).label(),
         temp_mean_c: round2(temp),
         pv_kwh_per_kwp: round2(pv),
         price_min: round2(pmin),
@@ -199,7 +199,7 @@ fn main() {
                     r.push(out);
                     eprintln!(
                         "{} done ({}/{}, {:.0} s)",
-                        Season::Day(d).label(),
+                        Season::Day(d, Zone::De).label(),
                         r.len(),
                         days.len(),
                         started.elapsed().as_secs_f64()
