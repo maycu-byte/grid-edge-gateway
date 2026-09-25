@@ -55,6 +55,23 @@ pub struct Site {
     pub surplus_hold_s: f64,
     #[serde(default)]
     pub import_target_kw: f64,
+    /// Before handing power back after a dimming, wait a random time up to
+    /// this long, so sites released together do not ramp up together. 0 = off.
+    #[serde(default)]
+    pub release_delay_max_s: f64,
+    /// Seed for that wait; by default derived from `site_id`.
+    pub release_delay_seed: Option<u64>,
+    /// An inverter above its limit this long is reported (point 2008).
+    #[serde(default = "default_pv_follow_timeout")]
+    pub pv_follow_timeout_s: f64,
+    /// Settling time at the start of a dimming, not counted in its report.
+    #[serde(default = "default_compliance_grace")]
+    pub compliance_grace_s: f64,
+    /// The site's name in compliance reports (e.g. its market location ID).
+    #[serde(default = "default_site_id")]
+    pub site_id: String,
+    /// Where compliance reports go; default `reports/` next to this file.
+    pub reports_dir: Option<PathBuf>,
     pub control_period_ms: u64,
     /// Readings older than this count as "device offline".
     pub stale_after_ms: u64,
@@ -493,8 +510,30 @@ impl Config {
             deadline_guard_s: self.site.deadline_guard_s,
             surplus_hold_s: self.site.surplus_hold_s,
             import_target_kw: self.site.import_target_kw,
+            release_delay_max_s: self.site.release_delay_max_s,
+            release_delay_seed: self.site.release_delay_seed.unwrap_or_else(|| fnv1a(&self.site.site_id)),
+            pv_follow_timeout_s: self.site.pv_follow_timeout_s,
+            compliance_grace_s: self.site.compliance_grace_s,
+            site_id: self.site.site_id.clone(),
         })
     }
+}
+
+fn default_pv_follow_timeout() -> f64 {
+    30.0
+}
+
+fn default_compliance_grace() -> f64 {
+    60.0
+}
+
+fn default_site_id() -> String {
+    "site".into()
+}
+
+/// A stable seed from a name, so every site draws its own release wait.
+fn fnv1a(s: &str) -> u64 {
+    s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
 }
 
 #[cfg(test)]

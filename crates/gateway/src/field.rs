@@ -270,7 +270,10 @@ async fn inverter_session(
             None => None,
         };
 
-        let target = setpoints.borrow().pv_limit_pct;
+        let target = {
+            let sp = setpoints.borrow();
+            sp.inverter_limit_pct.get(i).copied().unwrap_or(sp.pv_limit_pct)
+        };
         let due = match written {
             None => true,
             Some((pct, at)) => (pct - target).abs() > 0.05 || at.elapsed() > INVERTER_REFRESH,

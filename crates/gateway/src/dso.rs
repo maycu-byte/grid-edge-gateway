@@ -95,6 +95,7 @@ fn single_points(s: &Snapshot) -> Vec<(u32, bool)> {
         (2005, s.dso.emergency),
         (2006, s.refusals.contains(&"contract day limit reached")),
         (2007, s.refusals.contains(&"curtailment budget used up")),
+        (2008, s.fallbacks.iter().any(|f| f.ends_with("ignores its limit"))),
     ]
 }
 

@@ -2,10 +2,10 @@
 //! exactly what the gateway does over Modbus TCP — so the closed loop tests
 //! the same decoding and the same setpoint path.
 
-use control::{Readings, Setpoints};
+use control::{InverterReading, Readings, Setpoints};
 use devices::maps::{battery, evse, heat_pump, regs_to_u32};
 use devices::sim::{DeviceId, SiteSim};
-use devices::sunspec::{self, available, controls, inverter, meter};
+use devices::sunspec::{self, available, controls, inverter, meter, nameplate};
 
 /// Body address of a SunSpec model in a device's chain, found the way a
 /// Modbus client finds it: by walking the chain from register 40000.
@@ -27,6 +27,7 @@ pub fn arm_watchdogs(sim: &mut SiteSim) {
 pub fn read(sim: &SiteSim) -> Readings {
     let mut pv = Some(0.0);
     let mut avail = Some(0.0);
+    let mut inverters = Vec::new();
     for i in 0..sim.inverters.len() {
         let dev = DeviceId::Inverter(i);
         let kw = model_body(sim, dev, inverter::ID)
@@ -35,6 +36,13 @@ pub fn read(sim: &SiteSim) -> Readings {
         let av = model_body(sim, dev, available::ID)
             .and_then(|b| sim.read(dev, b, available::LEN as u16).ok())
             .map(|m| sunspec::scaled(m[available::W_AVAIL] as i16, m[available::W_AVAIL_SF] as i16) / 1000.0);
+        let rated = model_body(sim, dev, nameplate::ID)
+            .and_then(|b| sim.read(dev, b, nameplate::LEN as u16).ok())
+            .map(|m| sunspec::scaled(m[nameplate::W_RTG] as i16, m[nameplate::W_RTG_SF] as i16) / 1000.0);
+        inverters.push(match (kw, rated) {
+            (Some(kw), Some(rated_kw)) => InverterReading { online: true, kw, rated_kw },
+            _ => InverterReading::default(),
+        });
         pv = pv.zip(kw).map(|(a, b)| a + b);
         avail = avail.zip(av).map(|(a, b)| a + b);
     }
@@ -89,13 +97,14 @@ pub fn read(sim: &SiteSim) -> Readings {
         })
         .collect();
 
-    Readings { grid_kw: grid, pv_kw: pv, pv_available_kw: avail, chargers, heat_pumps, batteries }
+    Readings { grid_kw: grid, pv_kw: pv, pv_available_kw: avail, inverters, chargers, heat_pumps, batteries }
 }
 
 pub fn write(sim: &mut SiteSim, sp: &Setpoints) {
     for i in 0..sim.inverters.len() {
         if let Some(b) = model_body(sim, DeviceId::Inverter(i), controls::ID) {
-            let raw = sunspec::unscaled(sp.pv_limit_pct, -1) as u16;
+            let pct = sp.inverter_limit_pct.get(i).copied().unwrap_or(sp.pv_limit_pct);
+            let raw = sunspec::unscaled(pct, -1) as u16;
             let _ = sim.write(DeviceId::Inverter(i), b + controls::W_MAX_LIM_PCT as u16, &[raw]);
             let _ = sim.write(DeviceId::Inverter(i), b + controls::W_MAX_LIM_ENA as u16, &[1]);
         }

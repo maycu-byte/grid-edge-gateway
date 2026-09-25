@@ -8,6 +8,7 @@
 use std::collections::VecDeque;
 
 use crate::accounting::{Accounting, Clock, Totals};
+use crate::compliance::{DimmingReport, Recorder};
 use crate::policy::{ConsumptionRule, Policy};
 use crate::rules::{EV_MIN_CURRENT_A, SteuVE, three_phase_current_a, three_phase_kw};
 
@@ -65,6 +66,21 @@ pub struct SiteConfig {
     /// After a dimming ends, grant power back linearly over this time
     /// (BK6-22-300 4.3: the return to normal must be gradual).
     pub release_ramp_s: f64,
+    /// Before that ramp starts, wait a random time up to this long, so that
+    /// sites released by the same command do not ramp up together (the UK
+    /// Smart Charge Points Regulations 2021 ask for up to 600 s). 0 = off.
+    pub release_delay_max_s: f64,
+    /// Seed for that random wait; give each site its own.
+    pub release_delay_seed: u64,
+    /// An inverter still producing above its limit this long after it was
+    /// sent is reported (IEC 104 point 2008) and the others make up for it.
+    /// 0 = never check.
+    pub pv_follow_timeout_s: f64,
+    /// Seconds after a dimming starts before the compliance report counts
+    /// draw above the floor (the devices' own reaction time).
+    pub compliance_grace_s: f64,
+    /// Name of the site in compliance reports (e.g. its market location).
+    pub site_id: String,
     /// When a feed-in limit is raised or lifted, PV may climb at most this
     /// fast (% of installed power per second); reductions apply at once.
     pub pv_ramp_pct_per_s: f64,
@@ -107,8 +123,19 @@ impl SiteConfig {
         pos(self.pv_installed_kw, "pv_installed_kw")?;
         pos(self.connection_kw, "connection_kw")?;
         pos(self.pv_ramp_pct_per_s, "pv_ramp_pct_per_s")?;
-        if self.margin_kw < 0.0 || self.release_ramp_s < 0.0 || self.min_dwell_s < 0.0 || self.surplus_hold_s < 0.0 {
-            return Err("margin_kw, release_ramp_s, min_dwell_s and surplus_hold_s must be ≥ 0".into());
+        let non_negative = [
+            self.margin_kw,
+            self.release_ramp_s,
+            self.min_dwell_s,
+            self.surplus_hold_s,
+            self.release_delay_max_s,
+            self.pv_follow_timeout_s,
+            self.compliance_grace_s,
+        ];
+        if non_negative.iter().any(|v| v.is_nan() || *v < 0.0) {
+            return Err("margin_kw, release_ramp_s, min_dwell_s, surplus_hold_s, release_delay_max_s, \
+                        pv_follow_timeout_s and compliance_grace_s must be ≥ 0"
+                .into());
         }
         for (i, c) in self.chargers.iter().enumerate() {
             if !(EV_MIN_CURRENT_A..=63.0).contains(&c.max_current_a) {
@@ -182,6 +209,13 @@ pub struct HeatPumpReading {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct InverterReading {
+    pub online: bool,
+    pub kw: f64,
+    pub rated_kw: f64,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct BatteryReading {
     pub online: bool,
     pub soc_pct: f64,
@@ -197,6 +231,9 @@ pub struct Readings {
     pub pv_kw: Option<f64>,
     /// PV the sun would allow without any limit, if the inverters report it.
     pub pv_available_kw: Option<f64>,
+    /// Each inverter on its own, to check that it follows its limit. Empty
+    /// = not known; every inverter then gets the same limit.
+    pub inverters: Vec<InverterReading>,
     pub chargers: Vec<ChargerReading>,
     pub heat_pumps: Vec<HeatPumpReading>,
     pub batteries: Vec<BatteryReading>,
@@ -224,6 +261,11 @@ pub struct Guidance {
 pub struct Setpoints {
     /// Active power limit for the inverters, % of installed power.
     pub pv_limit_pct: f64,
+    /// Limit per inverter, % of its rating: `pv_limit_pct` for all, except
+    /// that the others take over what an inverter ignoring its limit
+    /// produces too much. Empty when the readings had no per-inverter data;
+    /// use `pv_limit_pct` then.
+    pub inverter_limit_pct: Vec<f64>,
     /// Current limit per charger; 0 = pause.
     pub charger_current_a: Vec<f64>,
     /// Power limit per heat pump; 0 = off.
@@ -241,6 +283,8 @@ pub enum Fallback {
     MeterImplausible,
     PvOffline,
     PvImplausible,
+    /// The inverter keeps producing above the limit it was sent.
+    InverterIgnoresLimit(usize),
     ChargerOffline(usize),
     HeatPumpOffline(usize),
     BatteryOffline(usize),
@@ -266,6 +310,8 @@ pub enum Refusal {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Status {
     pub mode: Mode,
+    /// While releasing: seconds of random wait left before power returns.
+    pub release_wait_s: Option<f64>,
     /// Minimum grid power the controllable devices keep while dimmed.
     pub floor_kw: f64,
     /// Power the controllable devices may draw from the grid right now,
@@ -303,6 +349,13 @@ pub struct Controller {
     guidance: Option<Guidance>,
     /// PV surplus measured over the last `surplus_hold_s`: (time, kW).
     surplus_seen: VecDeque<(f64, f64)>,
+    /// xorshift state for the release wait.
+    rng: u64,
+    /// Limit last sent to each inverter, %, and since when it has been
+    /// producing above it.
+    inverter_sent_pct: Vec<f64>,
+    inverter_over_since: Vec<Option<f64>>,
+    compliance: Recorder,
 }
 
 impl Controller {
@@ -312,9 +365,10 @@ impl Controller {
             ConsumptionRule::De14a => cfg.steuve().pmin_kw(),
             ConsumptionRule::Contract { min_kw, .. } => min_kw,
         };
+        // xorshift must not start at 0.
+        let rng = cfg.release_delay_seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
         Controller {
             floor_kw,
-            cfg,
             was_dimmed: false,
             last_budget_kw: f64::INFINITY,
             release: None,
@@ -325,7 +379,41 @@ impl Controller {
             accounting: Accounting::default(),
             guidance: None,
             surplus_seen: VecDeque::new(),
+            rng,
+            inverter_sent_pct: Vec::new(),
+            inverter_over_since: Vec::new(),
+            compliance: Recorder::new(&cfg.site_id, cfg.compliance_grace_s, 0),
+            cfg,
         }
+    }
+
+    /// Timestamps for compliance reports: Unix time of this controller's
+    /// clock zero, ms (the gateway: now − t_s; the demo: the simulated day).
+    pub fn with_report_epoch(mut self, epoch_ms: i64) -> Self {
+        self.compliance.set_epoch(epoch_ms);
+        self
+    }
+
+    /// Continues the report chain after a restart.
+    pub fn with_report_chain(mut self, seq: u32, last_sha256: &str) -> Self {
+        self.compliance.resume(seq, last_sha256);
+        self
+    }
+
+    /// Reports of finished dimmings not yet taken, oldest first.
+    pub fn reports(&self) -> &[DimmingReport] {
+        self.compliance.reports()
+    }
+
+    /// Takes the finished reports (to write them somewhere).
+    pub fn take_reports(&mut self) -> Vec<DimmingReport> {
+        self.compliance.take_reports()
+    }
+
+    /// Number of reports so far and the digest of the last one.
+    pub fn report_chain(&self) -> (u32, String) {
+        let (seq, last) = self.compliance.chain();
+        (seq, last.to_string())
     }
 
     /// Guidance for the next cycles, or `None` to run on rules alone (no
@@ -454,6 +542,7 @@ impl Controller {
             dim = false;
         }
         let mode;
+        let mut release_wait_s = None;
         let budget = if dim {
             mode = Mode::Dimmed;
             self.release = None;
@@ -461,9 +550,16 @@ impl Controller {
             self.floor_kw + held_surplus.unwrap_or(0.0) - cfg.margin_kw
         } else {
             if self.was_dimmed {
-                self.release = Some((t_s, self.last_budget_kw));
+                // The ramp starts after a random wait (0 when switched off).
+                let wait = cfg.release_delay_max_s * random_unit(&mut self.rng);
+                self.release = Some((t_s + wait, self.last_budget_kw));
             }
             match self.release {
+                Some((t0, from)) if t_s < t0 => {
+                    mode = Mode::Releasing;
+                    release_wait_s = Some(t0 - t_s);
+                    from
+                }
                 Some((t0, from)) if t_s - t0 < cfg.release_ramp_s => {
                     mode = Mode::Releasing;
                     let full = cfg.rated_loads_kw();
@@ -536,6 +632,47 @@ impl Controller {
         };
         self.last_pv_pct = pv_limit_pct;
 
+        // --- inverters that ignore their limit ------------------------------
+        // Compare each inverter's output with the limit it was sent last
+        // cycle. One still above it after `pv_follow_timeout_s` is reported;
+        // its output is taken as given and the others are limited further so
+        // the plant as a whole stays at the limit.
+        let n_inv = r.inverters.len();
+        if self.inverter_sent_pct.len() != n_inv {
+            self.inverter_sent_pct = vec![100.0; n_inv];
+            self.inverter_over_since = vec![None; n_inv];
+        }
+        let mut ignoring = vec![false; n_inv];
+        for (i, inv) in r.inverters.iter().enumerate() {
+            let sent = self.inverter_sent_pct[i];
+            let tolerance_kw = cfg.margin_kw.max(0.02 * inv.rated_kw);
+            let over = inv.online && sent < 100.0 && inv.kw > inv.rated_kw * sent / 100.0 + tolerance_kw;
+            if !over {
+                self.inverter_over_since[i] = None;
+                continue;
+            }
+            let since = *self.inverter_over_since[i].get_or_insert(t_s);
+            if cfg.pv_follow_timeout_s > 0.0 && t_s - since >= cfg.pv_follow_timeout_s {
+                ignoring[i] = true;
+                fallbacks.push(Fallback::InverterIgnoresLimit(i));
+            }
+        }
+        let inverter_limit_pct: Vec<f64> = if pv_limit_pct >= 100.0 || !ignoring.contains(&true) {
+            vec![pv_limit_pct; n_inv]
+        } else {
+            let target_kw = cfg.pv_installed_kw * pv_limit_pct / 100.0;
+            let stuck_kw: f64 = r.inverters.iter().zip(&ignoring).filter(|(_, g)| **g).map(|(v, _)| v.kw).sum();
+            let free_rated: f64 =
+                r.inverters.iter().zip(&ignoring).filter(|(v, g)| !**g && v.online).map(|(v, _)| v.rated_kw).sum();
+            let free_pct = if free_rated > 0.0 {
+                ((target_kw - stuck_kw) / free_rated * 100.0).clamp(0.0, pv_limit_pct)
+            } else {
+                pv_limit_pct
+            };
+            ignoring.iter().map(|&g| if g { pv_limit_pct } else { free_pct }).collect()
+        };
+        self.inverter_sent_pct.clone_from(&inverter_limit_pct);
+
         // --- running totals -------------------------------------------------
         let curtailed_kw = match (r.pv_available_kw, pv_kw) {
             (Some(avail), Some(pv)) if pv_limit_pct < 100.0 => (avail - pv).max(0.0),
@@ -545,6 +682,7 @@ impl Controller {
 
         let status = Status {
             mode,
+            release_wait_s,
             floor_kw: self.floor_kw,
             steuve_budget_kw: budget.is_finite().then_some(budget.max(0.0)),
             steuve_kw,
@@ -565,8 +703,23 @@ impl Controller {
                 Some(planned.min(heat_pump_limit_kw[i]).max(0.0))
             })
             .collect();
+        self.compliance.observe(
+            t_s,
+            status.mode == Mode::Dimmed,
+            status.emergency,
+            status.floor_kw,
+            status.steuve_grid_kw,
+            status.steuve_budget_kw,
+        );
         (
-            Setpoints { pv_limit_pct, charger_current_a, heat_pump_limit_kw, battery_kw: battery_sp, heat_pump_ext_kw },
+            Setpoints {
+                pv_limit_pct,
+                inverter_limit_pct,
+                charger_current_a,
+                heat_pump_limit_kw,
+                battery_kw: battery_sp,
+                heat_pump_ext_kw,
+            },
             status,
         )
     }
@@ -812,4 +965,12 @@ impl Controller {
             self.charger_switched_at[i] = t_s;
         }
     }
+}
+
+/// Uniform in [0, 1) from a xorshift64 state.
+fn random_unit(state: &mut u64) -> f64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    (*state >> 11) as f64 / (1u64 << 53) as f64
 }

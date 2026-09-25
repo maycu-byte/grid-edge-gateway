@@ -12,6 +12,9 @@ connection_kw = 250.0       # grid connection rating; readings far beyond it are
 # grid connection; "plant_output": to the inverters' output itself.
 feed_in_reference = "grid_connection_point"
 release_ramp_s = 300.0      # hand power back gradually after a dimming
+# release_delay_max_s = 600.0 # first wait a random 0–600 s, so sites released together do not ramp up together
+site_id = "demo-depot"      # name in the compliance reports, written to reports/ next to this file
+pv_follow_timeout_s = 30.0  # an inverter above its limit this long is reported (IOA 2008)
 pv_ramp_pct_per_s = 0.17    # PV limit raised by at most ~10% of installed power per minute
 import_target_kw = 0.0      # battery discharges to keep grid import at or below this
 margin_kw = 0.3             # headroom below every limit

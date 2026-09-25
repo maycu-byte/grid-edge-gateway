@@ -4,6 +4,10 @@
 
 **[Open the live demo →](https://maycu-byte.github.io/grid-edge-gateway/)** The demo runs this code in your browser, compiled to WebAssembly — the planner's quadratic program included. You play the grid operator: pick the country, the day and the controller, send the commands and watch the site respond, frame by frame, next to a copy of the same site running on rules alone.
 
+**Feeder calculator.** Below the demo, a calculator answers the question the rebound study asks: when a §14a reduction ends for many sites at once, which way of bringing them back is most viable? Pick the number of sites, the transformer, identical or different van timetables, the day, the length of the reduction, the release policy (at once, the German 5-minute ramp, a random wait of up to 10 or 30 minutes, a 30-minute ramp, release in groups) and the site controller. The page simulates every site with the same code as the study (`closedloop::feeder`) and the same evening without a reduction, then reports the peak after the release, minutes over the transformer, the rebound, the energy pushed later and the energy the vans are left without, and marks the most viable option. With the defaults, every rule-based release brings the transformer back to overload, a slower restart only makes the rise gentler, and the price-aware planner stays at half the transformer with every van charged. The evening then plays back minute by minute: the feeder curve, the release phase, a gauge against the transformer and one square per site, with play, speed and a time slider.
+
+The page is available in English, Portuguese and German (switch at the top right; it follows the browser language by default). A sidebar leads to each section; a first section explains what is simulated, and a data-sources section lists what is real (German day-ahead prices from SMARD, the BNetzA and national rules) and what is modelled (weather, vans, building, tariff), and why the demo uses two representative days.
+
 ![A winter day under the planner, on the real prices of 20 January 2025: the battery charges at noon and discharges into the evening price peak, the building is warmed before the §14a dimming, the overnight vans charge at a flat 42 kW. Against the same site on rules alone: 76 € less, and a peak of 42 kW instead of 110 kW](docs/screenshot-day.png)
 
 ## The problem
@@ -37,7 +41,9 @@ DSO control centre ──IEC 104 / TLS──► grid-edge-gateway ──Modbus T
 | **Battery** | Stores what would be exported, so a feed-in limit is absorbed before any PV is curtailed; covers imports; while dimmed, discharges so the loads keep more of their budget. It never charges from the grid while dimmed. With a plan, it holds the planned grid exchange instead and so absorbs the forecast errors. |
 | **Following a plan** | The planner's schedule is *guidance*. Chargers are capped at the planned current, but a car whose slack drops under 15 minutes charges at full power whatever the plan says; the heat pump gets the planned power as an external request (SG Ready / EEBUS style) and keeps its own comfort guard; every hard rule above is applied after the plan. A property test feeds 10,000 random plans during a dimming and checks that the floor, the 0 or 6–32 A currents in whole amps and the heat-pump cap still hold. |
 | **Emergency** | A separate command for an immediate, serious threat (StromVG 17c 4b): overrides day limits, budgets and opt-outs. |
-| **Gradual release** | After a dimming ends, power returns linearly over 5 minutes (BK6-22-300, 4.3); a raised feed-in limit returns at about 10% of installed power per minute. |
+| **Gradual release** | After a dimming ends, power returns linearly over 5 minutes (BK6-22-300, 4.3); a raised feed-in limit returns at about 10% of installed power per minute. Optionally the site first waits a random 0–`release_delay_max_s` seconds, so that sites released by the same command do not ramp up together (the UK asks for up to 600 s: [SI 2021/1467](https://www.legislation.gov.uk/uksi/2021/1467/part/2/made)). |
+| **Proof of each dimming** | When a dimming ends, the gateway writes a CSV report: the floor, the controllable devices' grid draw every second, the time above the floor after a 60 s settling time, and a verdict (followed, exceeded, unverified). Each report names the SHA-256 of the one before, so a report edited or deleted later breaks the chain. The operator must be able to show this to the DSO and keep it for two years ([Anlage 1](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK6-GZ/2022/BK6-22-300/Beschluss/BK6-22-300_Beschluss_Anlage1.pdf?__blob=publicationFile&v=1), 7.2–7.3). Reports go to `reports/` and are served at `/api/reports`. |
+| **Inverters that ignore their limit** | Each inverter's output is compared with the limit it was sent. One still above it after `pv_follow_timeout_s` (30 s) is reported to the DSO (point 2008), its output is taken as given, and the other inverters are limited further so the plant as a whole keeps to the limit. |
 
 ## IEC 104 point list (common address 1)
 
@@ -66,6 +72,7 @@ DSO control centre ──IEC 104 / TLS──► grid-edge-gateway ──Modbus T
 | 2005 | M_SP_TB_1 | site → DSO | Emergency active (feedback of 5003) |
 | 2006 | M_SP_TB_1 | site → DSO | Contract day limit reached, dimming refused |
 | 2007 | M_SP_TB_1 | site → DSO | Curtailment budget used up |
+| 2008 | M_SP_TB_1 | site → DSO | An inverter ignores its limit (the others are limited further) |
 
 Commands support direct execute and select-before-operate. Unknown addresses, types, causes and common addresses get the negative confirmations the standard defines (causes 44–47). Measurements are sent spontaneously outside a deadband and all together in a general interrogation.
 
@@ -79,6 +86,7 @@ Commands support direct execute and select-before-operate. Unknown addresses, ty
 | Gateway restarts | DSO commands and the running totals (minutes dimmed today, energy curtailed this year) are persisted with write-then-rename, so a dimming or a used-up budget survives a power cut. |
 | Grid meter lost **or implausible** | A reading far beyond the connection rating (e.g. a wrong scale factor) counts as lost. The budget shrinks to the floor; the feed-in limit falls back to plant-output mode. Point 2003 goes ON. |
 | A device stops answering | Assumed to draw its failsafe current (charger) or rated power (heat pump); a silent battery is assumed idle. The budget for the others shrinks accordingly. |
+| An inverter answers but ignores its limit | Reported after 30 s (2008 and 2004 go ON); the other inverters take over its share of the limit. |
 | Battery and curtailment chase each other | The battery plans from the PV the sun *allows* (vendor SunSpec model 64900), so a curtailment never looks like a deficit to discharge into. Without that reading it never discharges under a feed-in limit. |
 | DSO link lost | Configurable: `hold` the last commands (default) or `release` them after a set time. An emergency always stays until the DSO clears it. |
 | A contract's day limit or a budget is used up | The command is refused, the refusal is reported (2006 / 2007), and an emergency still overrides it. |
@@ -129,18 +137,18 @@ Without prices, or with a plan older than an hour, the site runs on rules alone.
 | Crate | What it is |
 |---|---|
 | [`iec104`](crates/iec104) | IEC 60870-5-104 from scratch, with no dependencies: APDU framing, the ASDUs above plus clock sync and interrogation, CP56Time2a, and the controlled-station link layer (k/w windows, t1/t2/t3 timers, 15-bit sequence numbers) as a **sans-IO state machine**, so every timing rule is unit-tested without sleeping. An optional tokio driver runs it over TCP or TLS. |
-| [`control`](crates/control) | The real-time layer: country policies (`policy.rs`), running totals (`accounting.rs`) and the controller, pure functions and a small state machine. It takes a plan as guidance and enforces every rule after it. The same code runs in the gateway, in the tests and in the browser. |
+| [`control`](crates/control) | The real-time layer: country policies (`policy.rs`), running totals (`accounting.rs`), the compliance recorder (`compliance.rs`) and the controller, pure functions and a small state machine. It takes a plan as guidance and enforces every rule after it. The same code runs in the gateway, in the tests and in the browser. |
 | [`planner`](crates/planner) | The planning layer: the site's next 24 hours as a convex quadratic program, solved with [Clarabel](https://github.com/oxfordcontrol/Clarabel.rs) (interior point, pure Rust, also in WebAssembly). Battery with losses and ageing, a first-order thermal model of the building, each car's request, the expected dimming window, a demand charge, and deterministic, chance-constrained or robust handling of forecast errors. See [docs/mpc.md](docs/mpc.md). |
 | [`planning`](crates/planning) | The glue between the site and the optimiser, shared by the gateway, the study and the browser, so all three plan the same way. It builds the planner's input from what the devices report, turns a plan into guidance for the real-time layer, learns the base-load profile, meters the quarter-hour peak, and keeps Central European time, summer time included, without a time-zone database. |
 | [`closedloop`](crates/closedloop) | The simulated depot, the register adapter, the real-time controller and the planner with its forecaster, wired into one loop; and the [`study`](crates/closedloop/src/bin/study.rs) binary, a Monte Carlo comparison of the strategies. |
 | [`devices`](crates/devices) | SunSpec register layouts (models 1, 103, 120, 123, 203 and a vendor model), typical wallbox, heat-pump and battery maps with watchdogs, and a deterministic simulation of the depot over several days: PV under random cloudiness, the building's heat balance, battery losses, a van fleet with arrival and departure times, and real German day-ahead prices for a spring and a winter day. |
-| [`gateway`](crates/gateway) | The binary: one supervised task per Modbus device (SunSpec discovery by walking the model chain, reconnect, staleness detection), a 1 s control loop, the IEC 104 station, TLS (rustls), persistence and a read-only JSON/WebSocket API. The planning layer's live feeds are here too: ENTSO-E and Energy-Charts day-ahead prices, and the Open-Meteo forecast. |
+| [`gateway`](crates/gateway) | The binary: one supervised task per Modbus device (SunSpec discovery by walking the model chain, reconnect, staleness detection), a 1 s control loop, the IEC 104 station, TLS (rustls), persistence, the compliance reports on disk and a read-only JSON/WebSocket API. The planning layer's live feeds are here too: ENTSO-E and Energy-Charts day-ahead prices, and the Open-Meteo forecast. |
 | [`site-sim`](crates/site-sim) | Every device of the depot as its own Modbus TCP server, with an HTTP endpoint to take devices offline. With `--start now`, its sun is at today's hour, for runs against live prices and weather. |
 | [`web-demo`](crates/web-demo) | The browser build: the closed loop (planner included) + IEC 104 encoder in WebAssembly, with a rules-only copy of the site alongside for comparison. The controller reads and writes the simulated devices through their register maps, like the gateway does over Modbus TCP. |
 
 ## Testing
 
-- **142 Rust tests.** They cover:
+- **157 Rust tests.** They cover:
   - protocol frames checked against reference octets, every link-layer timer and window, sequence-number wrap-around;
   - the Pmin formula for several device mixes, allocation scenarios, each country's rules, day and year roll-over of the totals, the battery, plausibility checks, ramps and config validation;
   - three property tests over 45,000 random site states and plans. While dimmed, in every country, with a battery and whatever the plan says, the loads never get more than the floor + PV surplus + battery discharge. Every charger current is 0 or 6–32 A in whole amps;
@@ -153,13 +161,16 @@ Without prices, or with a plan older than an hour, the site runs on rules alone.
     - the nowcast and base-load learning;
     - billing-peak metering and restarts;
     - Central European summer time;
+  - the checks around a command: the random wait before power returns, an inverter that ignores its limit (reported after the timeout, the other one makes up for it), and the compliance reports (verdicts, the SHA-256 chain, a forged value breaking it, the chain continuing after a restart, file names that cannot escape the report folder);
   - the site simulation: register maps and watchdogs, the thermostat and an EMS taking it over (with the heat pump's own comfort guard), departures and unmet energy, day-to-day weather, prices in local time.
-- **18 interoperability tests** ([`interop/`](interop/test_interop.py)). They start the real simulator and gateway and drive them with [c104](https://github.com/Fraunhofer-FIT-DIEN/iec104-python), a Python binding of lib60870, as the DSO control centre. They cover:
+- **20 interoperability tests** ([`interop/`](interop/test_interop.py)). They start the real simulator and gateway and drive them with [c104](https://github.com/Fraunhofer-FIT-DIEN/iec104-python), a Python binding of lib60870, as the DSO control centre. They cover:
   - general interrogation, §14a compliance within seconds, gradual release and negative confirmations;
   - meter loss, a battery gone silent, the emergency command and the link-loss policy;
   - persistence across a restart, the Austrian 70% cap and the Swiss 3% budget running out;
   - the planner in the running gateway: it moves the overnight vans' charging to cheap hours, and the Pmin floor holds when the DSO dims;
+  - two dimmings leaving two chained reports on disk and at `/api/reports`, and an inverter that ignores its limit being reported over IEC 104;
   - TLS acceptance and rejection.
+- **77 browser checks** of the live page with Playwright, in English, Portuguese and German at 1366 px, 1920 px (dark mode) and 390 px: nothing left untranslated, no horizontal scroll, the calculator's output and its minute-by-minute playback (clock, one square per site, time slider), the height difference between side-by-side columns, switching language while the demo runs, no console errors. They were run by hand for this version; CI does not run them yet.
 - CI runs `fmt`, `clippy -D warnings`, all tests and the interop suite on every push, then builds the WebAssembly demo and deploys it to GitHub Pages.
 
 ## Run it locally
@@ -173,7 +184,7 @@ cargo build
 ./target/debug/gateway examples/gateway-ch.toml        # or Switzerland (examples/gateway-at.toml: Austria)
 ```
 
-Then act as the DSO with any IEC 104 master (address 1, IOA 5001 / 5002 / 5003), or run the tests:
+Then act as the DSO with any IEC 104 master (address 1, IOA 5001 / 5002 / 5003), and read the reports of past dimmings with `curl localhost:8080/api/reports`. Or run the tests:
 
 ```sh
 pip install -r interop/requirements.txt
@@ -199,6 +210,12 @@ To get an ENTSO-E token:
 
 The token is read only from the environment and never written to a log.
 
+The rebound study behind the feeder calculator (20 sites × 10 days × 33 cases: identical and mixed fleets, release in groups, 1–3 h reductions, the planner with and without notice, spring; about 30 minutes):
+
+```sh
+cargo run --release -p closedloop --bin rebound -- --sites 20 --reps 10     # → docs/study/rebound
+```
+
 The planner study (a few minutes on a laptop):
 
 ```sh
@@ -206,6 +223,25 @@ cargo run --release -p closedloop --bin study -- --seeds 30                     
 cargo run --release -p closedloop --bin study -- --seeds 30 --dim 13-15 --out docs/study/afternoon
 cargo run --release -p closedloop --bin study -- trace winter 1 mpc trace.csv             # one run, every 5 min
 ```
+
+## Where this fits, and what is still missing
+
+In a German home, the hardware towards the DSO is already mandated and price-capped by law: a smart meter gateway plus an FNN control box. Together they cost the customer at most about 80–100 € a year. The flat §14a grid-fee reduction ("Modul 1", 110–190 € a year) pays for that on its own. What remains open is the software between the control box and the devices:
+- splitting the guaranteed minimum among several devices;
+- proving afterwards that every dimming was followed;
+- using time-variable grid fees ("Modul 3") and day-ahead prices.
+
+Open-source energy managers such as [evcc](https://docs.evcc.io/en/external-limit/) already take the control box's signal over a relay or EEBUS LPC. This project explores the parts around that signal: Pmin,14a with the simultaneity factor for several devices, gradual release, proof of each dimming, and a predictive planner.
+
+A review against the regulation found five gaps, in order of value. Three are closed:
+
+| Gap | Why it matters | Status |
+|---|---|---|
+| **A report of each dimming.** | The site operator must be able to show the DSO, case by case, that each reduction was carried out, and keep that for 2 years ([BK6-22-300 Anlage 1](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK6-GZ/2022/BK6-22-300/Beschluss/BK6-22-300_Beschluss_Anlage1.pdf?__blob=publicationFile&v=1), 7.2–7.3, since March 2025). | Done: a CSV per dimming, chained by SHA-256. The chain shows tampering but proves nothing about who wrote it; a real device would sign with a key in a secure element. |
+| **An inverter that ignores its limit.** | A silent failure otherwise. The operator must keep devices controllable at all times (Anlage 1, 4.6). | Done: reported (point 2008), the others make up for it. |
+| **A random wait before the release ramp.** | Without it, every site that ends a dimming at the same moment ramps up together: a second peak in the neighbourhood. The UK requires up to 600 s ([SI 2021/1467](https://www.legislation.gov.uk/uksi/2021/1467/part/2/made)). | Done, off by default in the gateway (`release_delay_max_s`); on in the demo. |
+| **An EEBUS LPC interface.** | EEBUS LPC is how German households receive §14a behind an FNN control box. DSO commands arrive only over IEC 104 here. | Open. |
+| **Re-planning on forecast error.** | A sudden drop in PV is absorbed by the real-time layer but does not trigger a new plan, which stays suboptimal until the next quarter-hour. | Open. |
 
 ## Limits and honest notes
 
@@ -221,7 +257,15 @@ cargo run --release -p closedloop --bin study -- trace winter 1 mpc trace.csv   
   - **Mid-quarter plans.** A plan made between quarter-hours treats the current quarter as a whole one.
   - **Unpublished prices.** Until tomorrow's prices are published (around 13:00), the plan assumes yesterday's for those hours.
   - **Tests.** The ENTSO-E parser is tested against documents in the published format, not a live answer: this repository has no token.
+  - **Weather licence.** The free Open-Meteo API is for non-commercial use only ([terms](https://open-meteo.com/en/terms)); a commercial deployment needs a paid plan, and a fleet should fetch one forecast per grid cell centrally rather than per site.
 - **Planner study.** The simulated building is the planner's own model (same thermal parameters), so model mismatch comes only from the forecasts; a real building would need its parameters identified first, and the gains would shrink. The rules baseline is plain (a fixed thermostat schedule with no optimum start, cars at full power on arrival). See [docs/mpc.md](docs/mpc.md#limits) for the rest.
+- **Not a product.** Four EU rules would apply to a device like this on the market:
+  - the Radio Equipment Directive's cybersecurity requirements (EN 18031, since August 2025, if it has a radio);
+  - the Data Act (user access to device data, for products placed on the market from 12 September 2026);
+  - the new Product Liability Directive, which covers software as a product from 9 December 2026;
+  - the Cyber Resilience Act (vulnerability reporting since 11 September 2026, full requirements from 11 December 2027).
+
+  This repository makes no claim of compliance with any of them.
 - **TLS interop.** The c104 2.2.1 client cannot be used for TLS here: its bundled mbedtls 3.6 refuses to verify a server without a hostname (`-0x5D80`), and the released binding cannot set one yet. The TLS tests therefore send raw IEC 104 frames through Python's `ssl` (OpenSSL).
 
 ## License

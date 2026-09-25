@@ -10,6 +10,8 @@ pub struct Snapshot {
     pub jurisdiction: &'static str,
     pub dso: DsoView,
     pub mode: &'static str,
+    /// While releasing: seconds of random wait left before power returns.
+    pub release_wait_s: Option<f64>,
     pub grid_kw: Option<f64>,
     pub pv_kw: Option<f64>,
     pub pv_available_kw: Option<f64>,
@@ -24,6 +26,9 @@ pub struct Snapshot {
     pub feed_in_limit_in_force_pct: f64,
     pub allowed_export_kw: f64,
     pub pv_limit_pct: f64,
+    /// Limit sent to each inverter, % (differs from `pv_limit_pct` while
+    /// one of them ignores its limit).
+    pub inverter_limit_pct: Vec<f64>,
     pub inverters: Vec<InverterView>,
     pub chargers: Vec<ChargerView>,
     pub heat_pumps: Vec<HeatPumpView>,
@@ -32,6 +37,9 @@ pub struct Snapshot {
     /// DSO commands not (fully) applied, and why.
     pub refusals: Vec<&'static str>,
     pub fallbacks: Vec<String>,
+    /// Compliance reports written since the start, and the last verdict.
+    pub reports_written: u32,
+    pub last_report_verdict: Option<&'static str>,
     /// Duration of the last control cycle; a cycle longer than the period is
     /// logged as an overrun.
     pub cycle_ms: f64,

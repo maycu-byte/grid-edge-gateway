@@ -36,7 +36,43 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--ground); color: var(--ink); font: 16px/1.55 var(--sans); padding-inline: 16px; padding-block: 28px 64px; }
-  .wrap { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 22px; }
+  .layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 28px; align-items: start; }
+  .wrap { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+  .sidebar { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 2px; font-size: .92rem; }
+  .sidebar .brand { font-weight: 700; font-size: 1rem; margin: 0 0 10px 10px; color: var(--ink); text-decoration: none; }
+  .sidebar a.nav { color: var(--ink2); text-decoration: none; padding: 7px 10px; border-radius: 8px; border-left: 3px solid transparent; }
+  .sidebar a.nav:hover { background: var(--sunk); color: var(--ink); }
+  .sidebar a.nav.on { background: var(--surface); color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
+  .sidebar hr { border: 0; border-top: 1px solid var(--hair); margin: 10px 0; width: 100%; }
+  .sidebar .ext::after { content: " \2197"; }
+  @media (max-width: 960px) {
+    .layout { grid-template-columns: 1fr; gap: 14px; }
+    .sidebar { flex-direction: row; overflow-x: auto; top: 0; z-index: 20; background: var(--ground); padding: 8px 0; border-bottom: 1px solid var(--hair); white-space: nowrap; }
+    .sidebar .brand, .sidebar hr { display: none; }
+    .sidebar a.nav { border-left: 0; border-bottom: 3px solid transparent; border-radius: 6px 6px 0 0; }
+    .sidebar a.nav.on { border-bottom-color: var(--accent); }
+  }
+  section[id], header[id] { scroll-margin-top: 16px; }
+  @media (max-width: 960px) { section[id], header[id] { scroll-margin-top: 64px; } }
+
+  /* context */
+  .ctx-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 4px; }
+  @media (max-width: 1100px) { .ctx-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 560px) { .ctx-grid { grid-template-columns: 1fr; } }
+  .ctx-grid > div { background: var(--sunk); border-radius: 10px; padding: 14px 16px; }
+  .ctx-grid .n { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 .8rem var(--sans); margin-bottom: 6px; }
+  .ctx-grid h3 { font-size: 1rem; }
+  .ctx-grid p { font-size: .9rem; }
+  .calc-guide { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+  @media (max-width: 860px) { .calc-guide { grid-template-columns: 1fr; } }
+  .calc-guide > div { border: 1px solid var(--hair); border-radius: 10px; padding: 10px 14px; font-size: .88rem; color: var(--ink2); }
+  .calc-guide b { color: var(--ink); display: block; margin-bottom: 2px; }
+  .calc-guide ul { margin: 4px 0 0; padding-left: 18px; }
+  .sw { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  .data-note { background: var(--sunk); border-radius: 10px; padding: 14px 16px; margin-top: 14px; }
+  .data-note h3 { font-size: 1rem; }
+  .data-note p { font-size: .92rem; max-width: 110ch; }
+  .tag-real { color: var(--good); font-weight: 600; } .tag-syn { color: var(--warn); font-weight: 600; }
   h1 { font-size: clamp(1.8rem, 3.6vw, 2.5rem); line-height: 1.1; margin: 0; letter-spacing: -.02em; text-wrap: balance; }
   h2 { font-size: .76rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink3); margin: 0 0 12px; font-weight: 600; }
   h3 { font-size: 1.05rem; margin: 0 0 6px; }
@@ -58,6 +94,7 @@
   .seg { display: flex; gap: 3px; background: var(--sunk); border-radius: 8px; padding: 3px; }
   .seg button { flex: 1; border: 0; background: transparent; color: var(--ink2); font: inherit; font-weight: 400; padding: 7px 6px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
   .seg button[aria-pressed=true] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+  @media (max-width: 560px) { .seg button { white-space: normal; } }
   .seg button.dso[aria-pressed=true] { color: var(--dso); }
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .dsobar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; font-size: .86rem; color: var(--ink2); border-bottom: 1px solid var(--hair); padding-bottom: 12px; margin-bottom: 2px; }
@@ -153,20 +190,103 @@
   #arch { width: 100%; height: auto; display: block; max-width: 980px; }
   #arch text { font: 13px var(--sans); fill: var(--ink); }
   #arch .small { font-size: 11.5px; fill: var(--ink2); }
+  header .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .seg.lang { flex: none; }
+  .seg.lang button { padding: 5px 12px; font-weight: 600; }
   footer { color: var(--ink3); border-top: 1px solid var(--hair); padding-top: 16px; font-size: .9rem; }
   .noscript { color: var(--critical); }
+
+  [hidden] { display: none !important; }
+  .row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: stretch; }
+  .row2 .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (max-width: 960px) { .row2 { grid-template-columns: 1fr; } }
+
+  /* feeder calculator */
+  .calc-intro { font-size: .95rem; margin-top: 4px; }
+  .calc-body { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 24px; margin-top: 16px; align-items: start; }
+  @media (max-width: 960px) { .calc-body { grid-template-columns: 1fr; } }
+  .calc-controls { display: flex; flex-direction: column; gap: 12px; }
+  .calc-controls .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .calc-controls .pair .field { justify-content: space-between; }
+  @media (max-width: 560px) {
+    .calc-controls .pair { grid-template-columns: 1fr; }
+    #c-release button { flex: 1 1 40%; }
+    .anim-bar .seg { margin-left: 0; flex: 1 1 100%; }
+    .anim-bar .seg button { white-space: nowrap; }
+  }
+  #c-out .gauge .labels { gap: 4px 12px; flex-wrap: wrap; }
+  .calc .seg { flex-wrap: wrap; }
+  .range { display: flex; gap: 12px; align-items: center; }
+  .range input { flex: 1; accent-color: var(--accent); }
+  .range b { min-width: 5ch; text-align: right; }
+  .calc-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .calc-actions button { border-radius: 8px; padding: 9px 16px; font: 600 .95rem var(--sans); cursor: pointer; border: 1px solid var(--accent); flex: 1; }
+  .calc-actions .primary { background: var(--accent); color: #fff; }
+  .calc-actions .secondary { background: var(--surface); color: var(--accent); }
+  .calc-actions button:disabled { opacity: .5; cursor: wait; }
+  #c-progress { margin: 0; min-height: 1.2em; }
+  .calc-view { min-width: 0; position: sticky; top: 12px; }
+  .calc-empty { background: var(--sunk); border-radius: 12px; padding: 22px; display: flex; flex-direction: column; gap: 12px; align-items: center; text-align: center; }
+  .calc-empty svg { width: min(320px, 100%); height: auto; }
+  .calc-empty p { font-size: .95rem; }
+  #c-out { display: flex; flex-direction: column; gap: 10px; }
+  .anim-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .anim-bar .play { border: 1px solid var(--hair); background: var(--surface); color: var(--ink); border-radius: 8px; width: 38px; height: 34px; cursor: pointer; }
+  .anim-bar b { font-size: 1.4rem; }
+  .anim-state { font-weight: 600; font-size: .92rem; padding: 3px 10px; border-radius: 12px; background: var(--sunk); }
+  .anim-state.dim { color: var(--dso); } .anim-state.rel { color: var(--warn); } .anim-state.over { color: var(--critical); }
+  .anim-bar .seg { margin-left: auto; }
+  #c-scrub { width: 100%; accent-color: var(--accent); }
+  #c-chart { width: 100%; height: auto; display: block; }
+  #c-chart text { font: 12px var(--sans); fill: var(--ink3); }
+  .feeder-now { display: flex; flex-direction: column; gap: 8px; }
+  .sitegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(22px, 1fr)); gap: 4px; }
+  .sitegrid i { aspect-ratio: 1; border-radius: 4px; background: var(--sunk); display: block; transition: background .15s; }
+  .sitegrid i.ok { background: var(--good); opacity: .75; } .sitegrid i.near { background: var(--warn); } .sitegrid i.hot { background: var(--critical); } .sitegrid i.exp { background: var(--s-grid); opacity: .6; }
+  .calc-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 760px) { .calc-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .calc .verdict { margin: 0; font-size: .95rem; max-width: none; }
+  .calc-compare { margin-top: 18px; }
+  #c-table td, #c-table th { white-space: nowrap; }
+  #c-table tbody tr { cursor: pointer; }
+  #c-table tbody tr:hover td { background: var(--sunk); }
+  #c-table tr.best td { font-weight: 600; color: var(--good); }
+  #c-table tr.shown td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 </style>
 </head>
 <body>
+<div class="layout">
+  <nav class="sidebar" aria-label="Sections">
+    <a class="brand" href="#top">Grid Edge Gateway</a>
+    <a class="nav" href="#context">What is simulated?</a>
+    <a class="nav" href="#demo">Live demo</a>
+    <a class="nav" href="#calculator">Feeder calculator</a>
+    <a class="nav" href="#data">Data sources</a>
+    <a class="nav" href="#how">How it works</a>
+    <a class="nav" href="#planning">The MPC study</a>
+    <a class="nav" href="#countries">Country rules</a>
+    <a class="nav" href="#points">IEC 104 point list</a>
+    <hr>
+    <a class="nav ext" href="https://github.com/maycu-byte/grid-edge-gateway">Source code and README</a>
+  </nav>
 <div class="wrap">
-  <header>
-    <h1>Grid Edge Gateway</h1>
-    <p>A site controller in Rust that sits between a grid operator and a commercial prosumer site. It speaks IEC 60870-5-104 to the operator's control centre and SunSpec Modbus to the inverters, chargers, heat pump and battery. A model-predictive planner schedules the site against real day-ahead prices; a real-time safety layer applies each country's rules — §14a EnWG in Germany, the ElWG feed-in cap in Austria, the 3% curtailment budget and flexibility contracts in Switzerland. What runs below is that code, compiled to WebAssembly.</p>
-    <div class="links"><a href="https://github.com/maycu-byte/grid-edge-gateway">Source code and README</a><a href="#how">How it works</a><a href="#planning">The MPC study</a><a href="#countries">Country rules</a><a href="#points">IEC 104 point list</a></div>
+  <header id="top">
+    <div class="top"><h1>Grid Edge Gateway</h1><div class="seg lang" id="lang-seg" role="group" aria-label="Language"><button data-v="en" aria-pressed="true" lang="en">EN</button><button data-v="pt" aria-pressed="false" lang="pt">PT</button><button data-v="de" aria-pressed="false" lang="de">DE</button></div></div>
+    <p data-block="intro">A site controller in Rust that sits between a grid operator and a commercial prosumer site. It speaks IEC 60870-5-104 to the operator's control centre and SunSpec Modbus to the inverters, chargers, heat pump and battery. A model-predictive planner schedules the site against real day-ahead prices; a real-time safety layer applies each country's rules — §14a EnWG in Germany, the ElWG feed-in cap in Austria, the 3% curtailment budget and flexibility contracts in Switzerland. What runs below is that code, compiled to WebAssembly.</p>
   </header>
+  <section class="panel" id="context" data-block="context">
+    <h2>What is simulated? · read this first</h2>
+    <div class="ctx-grid">
+      <div><span class="n">1</span><h3>A delivery depot in Germany</h3><p>One commercial site connected to the grid: 120 kWp of solar panels on the roof, four 22 kW chargers for its <b>electric delivery vans</b> (they come back in the late afternoon, charge overnight and leave in the morning), a 14 kW heat pump that heats the building and a 100 kWh battery.</p></div>
+      <div><span class="n">2</span><h3>A rule that lets the grid operator slow it down</h3><p>On winter evenings everyone draws power at once and the neighbourhood transformer can overload. The German §14a EnWG lets the grid operator <b>reduce</b> chargers, heat pumps and batteries for a while, as long as a guaranteed minimum is left.</p></div>
+      <div><span class="n">3</span><h3>The gateway in between</h3><p>The Grid Edge Gateway is the software between the grid operator and the depot. It receives the operator's commands (IEC 104), drives the devices (Modbus), keeps to the rules and, if you choose, plans the day by the electricity price. <b>In the live demo you are the grid operator:</b> press "Dim" and watch the site obey.</p></div>
+      <div><span class="n">4</span><h3>The question: what happens when the reduction ends?</h3><p>During the reduction the vans fall behind. When it ends, <b>every depot in the neighbourhood</b> catches up at the same moment, and the peak can be higher than with no reduction at all — the <i>rebound</i>. The <a href="#calculator">feeder calculator</a> simulates many depots together to find the least harmful way to bring them back.</p></div>
+    </div>
+  </section>
+
   <noscript><p class="noscript">This demo needs JavaScript and WebAssembly.</p></noscript>
 
-  <section class="panel controls" aria-label="DSO commands and simulation">
+  <section class="panel controls" id="demo" aria-label="DSO commands and simulation">
     <div class="dsobar"><span class="tag">DSO control centre</span><span>You are the grid operator. Every button sends a real IEC 104 command to the site; the frames appear in the log below.</span></div>
     <div class="field" style="grid-column: 1 / -1">Rules the site runs under
       <div class="seg" id="country-seg">
@@ -264,18 +384,21 @@
         <h2>Free curtailment budget (CH, 3% of yearly PV)</h2>
         <div class="gauge"><div class="track"><div class="fill"></div></div><div class="labels"><span id="b-now">–</span><span id="b-lim">–</span></div></div>
       </div>
-      <div class="stats" id="stats"></div>
-      <div class="panel">
-        <h2>Fault injection</h2>
-        <div class="faults" id="faults">
-          <button data-d="meter" aria-pressed="false">Meter offline</button>
-          <button data-d="charger1" aria-pressed="false">Charger 2 offline</button>
-          <button data-d="heatpump0" aria-pressed="false">Heat pump offline</button>
-          <button data-d="inverter0" aria-pressed="false">Inverter 1 offline</button>
-          <button data-d="battery0" aria-pressed="false">Battery offline</button>
-        </div>
-        <p style="font-size:.84rem;margin-top:8px">The device stops answering Modbus. Watch the fallbacks: a charger drops to its own 6 A failsafe and the battery goes idle after 30 s; without the meter the budget shrinks to the floor.</p>
+    </div>
+  </section>
+
+  <section class="row2">
+    <div class="stats" id="stats"></div>
+    <div class="panel">
+      <h2>Fault injection</h2>
+      <div class="faults" id="faults">
+        <button data-d="meter" aria-pressed="false">Meter offline</button>
+        <button data-d="charger1" aria-pressed="false">Charger 2 offline</button>
+        <button data-d="heatpump0" aria-pressed="false">Heat pump offline</button>
+        <button data-d="inverter0" aria-pressed="false">Inverter 1 offline</button>
+        <button data-d="battery0" aria-pressed="false">Battery offline</button>
       </div>
+      <p style="font-size:.84rem;margin-top:8px">The device stops answering Modbus. Watch the fallbacks: a charger drops to its own 6 A failsafe and the battery goes idle after 30 s; without the meter the budget shrinks to the floor.</p>
     </div>
   </section>
 
@@ -287,6 +410,108 @@
   <section class="panel">
     <div class="loghead"><h2>IEC 60870-5-104 frames on the DSO link</h2><label><input type="checkbox" id="hex"> show raw bytes</label></div>
     <div class="log" id="log" aria-live="off"></div>
+  </section>
+
+  <section class="panel calc" id="calculator" aria-labelledby="calc-h">
+    <h2 id="calc-h" data-i18n="cTitle">Feeder calculator · which way of ending a reduction is most viable?</h2>
+    <p class="calc-intro" data-i18n-html="cIntro">When a §14a reduction ends at the same time for many sites, their chargers and heat pumps catch up at once. The research behind this project (20 sites × 10 days × 33 cases, <a href="https://github.com/maycu-byte/grid-edge-gateway/tree/main/docs/study/rebound">docs/study/rebound</a>) found that a slow restart makes that rebound <i>gentler</i> but not <i>smaller</i>, and that a site planning by price avoids most of it. Test any combination yourself: the page simulates every site with the gateway's own code and compares it with the same evening without a reduction.</p>
+    <div class="calc-guide" data-block="calcGuide">
+      <div><b>1 · Describe the neighbourhood</b>How many depots share the transformer, how much it carries per depot, when the vans arrive, which day and how long the reduction lasts.</div>
+      <div><b>2 · Choose how the depots come back</b>All at once, slowly (ramp), after a random wait, in groups — or let each depot plan by price. Press <i>Calculate</i>, or <i>Compare all options</i> to test them all.</div>
+      <div><b>3 · Read the evening</b><ul><li><span class="sw" style="background:var(--s-grid)"></span>blue: the neighbourhood's load with your option</li><li><span class="sw" style="background:var(--ink2)"></span>dashed: the same evening with no reduction</li><li><span class="sw" style="background:var(--critical)"></span>red: the transformer's limit — blue above it is an overload</li><li>purple band: the reduction</li></ul></div>
+    </div>
+
+    <div class="calc-body">
+      <div class="calc-controls">
+        <div class="pair">
+        <div class="field"><span data-i18n="cSites">Sites on the feeder</span> <small data-i18n="cSitesSub">each is the demo depot with its own weather</small>
+          <div class="range"><input type="range" id="c-sites" min="1" max="40" value="20" aria-label="Sites"><b id="c-sites-v" class="mono">20</b></div>
+        </div>
+        <div class="field"><span data-i18n="cCap">Transformer capacity per site</span> <small id="c-cap-sub"></small>
+          <div class="range"><input type="range" id="c-cap" min="40" max="130" step="5" value="90" aria-label="Capacity"><b id="c-cap-v" class="mono">90 kW</b></div>
+        </div>
+        </div>
+        <div class="field"><span data-i18n="cFleet">When the electric vans arrive</span> <small data-i18n="cFleetSub">all at the same time = worst case for the transformer</small>
+          <div class="seg" id="c-fleet"><button data-v="same" aria-pressed="true" data-i18n="cSame">All at the same time</button><button data-v="mixed" aria-pressed="false" data-i18n="cMixed">Varied times</button></div>
+        </div>
+        <div class="field"><span data-i18n="cDay">Day</span>
+          <div class="seg" id="c-season"><button data-v="winter" aria-pressed="true" data-i18n="winterDay">Winter · 20 Jan 2025</button><button data-v="spring" aria-pressed="false" data-i18n="springDay">Spring · 6 Apr 2025</button></div>
+        </div>
+        <div class="field"><span data-i18n="cDur">Reduction from 17:30</span>
+          <div class="seg" id="c-dur"><button data-v="1" aria-pressed="false">1 h</button><button data-v="2" aria-pressed="true">2 h</button><button data-v="3" aria-pressed="false">3 h</button></div>
+        </div>
+        <div class="field"><span data-i18n="cRelease">How each site comes back</span>
+          <div class="seg" id="c-release">
+            <button data-v="step" aria-pressed="false" data-i18n="rStep">At once</button>
+            <button data-v="ramp" aria-pressed="true" data-i18n="rRamp">5-min ramp (DE rule)</button>
+            <button data-v="wait10" aria-pressed="false" data-i18n="rWait10">Ramp + wait ≤10 min</button>
+            <button data-v="wait30" aria-pressed="false" data-i18n="rWait30">Ramp + wait ≤30 min</button>
+            <button data-v="ramp30" aria-pressed="false" data-i18n="rRamp30">30-min ramp</button>
+          </div>
+        </div>
+        <div class="field"><span data-i18n="cGroups">Grid operator releases</span> <small data-i18n="cGroupsSub">groups 15 min apart</small>
+          <div class="seg" id="c-groups"><button data-v="1" aria-pressed="true" data-i18n="gAll">All at once</button><button data-v="2" aria-pressed="false" data-i18n="g2">2 groups</button><button data-v="4" aria-pressed="false" data-i18n="g4">4 groups</button></div>
+        </div>
+        <div class="field"><span data-i18n="cCtl">Site controller</span> <small data-i18n="cCtlSub">the planner schedules against day-ahead prices; slower</small>
+          <div class="seg" id="c-ctl"><button data-v="rules" aria-pressed="true" data-i18n="ctlRules">Rules only</button><button data-v="mpc" aria-pressed="false" data-i18n="ctlMpc">Planner (MPC)</button></div>
+        </div>
+        <div class="calc-actions">
+          <button class="primary" id="c-run" data-i18n="cRun">Calculate</button>
+          <button class="secondary" id="c-all" data-i18n="cAll">Compare all options</button>
+        </div>
+        <p class="muted" id="c-progress" aria-live="polite"></p>
+      </div>
+      <div class="calc-view">
+        <div class="calc-empty" id="c-empty">
+          <svg viewBox="0 0 320 120" aria-hidden="true"><rect x="96" y="10" width="120" height="100" rx="6" fill="var(--dso)" opacity=".1"/><path d="M10 80 L60 78 L90 30 L96 30 L96 88 L216 88 L230 20 L300 40" fill="none" stroke="var(--s-grid)" stroke-width="3"/><path d="M10 80 L60 78 L90 30 L130 34 L170 60 L230 86 L300 88" fill="none" stroke="var(--ink3)" stroke-width="2" stroke-dasharray="5 4"/><line x1="10" x2="310" y1="36" y2="36" stroke="var(--critical)" stroke-width="2"/></svg>
+          <p data-i18n="cEmpty">Pick a feeder on the left and press Calculate. Each site is simulated from 06:00 with the gateway's code; the evening then plays back here, minute by minute.</p>
+        </div>
+        <div id="c-out" hidden>
+          <div class="anim-bar">
+            <button class="play" id="c-play" aria-label="Pause">❚❚</button>
+            <b id="c-clock" class="mono">16:30</b>
+            <span class="anim-state" id="c-state"></span>
+            <div class="seg" id="c-speed"><button data-v="5" aria-pressed="false">5 min/s</button><button data-v="15" aria-pressed="true">15 min/s</button><button data-v="45" aria-pressed="false">45 min/s</button></div>
+          </div>
+          <input type="range" id="c-scrub" min="0" max="329" value="0" aria-label="Time">
+          <div class="legend"><span><i style="background:var(--s-grid)"></i><span data-i18n="lgOption">Feeder load, this option</span></span><span><i class="dash"></i><span data-i18n="lgBase">Same evening, no reduction</span></span><span><i style="background:var(--critical)"></i><span data-i18n="lgCap">Transformer capacity</span></span></div>
+          <svg id="c-chart" viewBox="0 0 760 260" role="img" aria-label="Feeder load around the reduction"></svg>
+          <div class="feeder-now">
+            <div class="gauge"><div class="track"><div class="fill" id="c-gfill"></div><div class="lim" style="left:83.3%"></div></div><div class="labels"><span id="c-gnow">–</span><span id="c-glim">–</span></div></div>
+            <div class="sitegrid" id="c-grid" aria-label="Sites"></div>
+            <p class="muted" data-i18n="cGridKey">Each square is one site: green below its share of the transformer, amber near it, red above, blue exporting.</p>
+          </div>
+          <div class="calc-kpis" id="c-kpis"></div>
+          <p class="verdict" id="c-verdict"></p>
+        </div>
+      </div>
+    </div>
+    <div class="calc-compare" id="c-compare" hidden>
+      <h2 class="sub"><span data-i18n="cCompare">Options calculated so far</span> <span class="key" data-i18n="cCompareKey">★ = most viable: nothing short for the vans, fewest minutes over the transformer after the release, then the lowest peak. Click a row to replay it.</span></h2>
+      <div class="scroll"><table id="c-table"></table></div>
+    </div>
+  </section>
+
+  <section class="panel" id="data" data-block="data">
+    <h2>Data sources · what is real and what is modelled</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Data</th><th>What is used</th><th>Source</th><th>Kind</th></tr></thead>
+      <tbody>
+        <tr><td>Electricity prices</td><td>Hourly day-ahead prices of the German–Luxembourg bidding zone for 20–22 January 2025 (peak 583 €/MWh at 17:00) and 6–8 April 2025 (−115 €/MWh at 14:00)</td><td>SMARD.de (Bundesnetzagentur), bidding zone DE-LU · <code>devices/src/prices_data.rs</code></td><td class="tag-real">real · Germany</td></tr>
+        <tr><td>Reduction rules</td><td>Minimum power Pmin,14a = 4.2 kW per device, simultaneity factor, 5-minute gradual release, proof of compliance</td><td>BNetzA decision BK6-22-300, Anlage 1 (§14a EnWG)</td><td class="tag-real">real · Germany</td></tr>
+        <tr><td>Feed-in rules</td><td>60% cap for new systems without a smart meter; no payment in negative hours</td><td>Solarspitzengesetz 2025; EEG §51</td><td class="tag-real">real · Germany</td></tr>
+        <tr><td>Austria and Switzerland</td><td>70% feed-in cap; 3% free curtailment budget; flexibility contracts</td><td>ElWG (BGBl. I 91/2025); StromVG Art. 17c, StromVV Art. 19b–19d</td><td class="tag-real">real · AT / CH</td></tr>
+        <tr><td>Sun and temperature</td><td>Clear-sky solar curve and daily temperature for south-west Germany, with a random cloudiness per day (sunny, mixed, overcast)</td><td>Model in <code>devices/src/climate.rs</code>, parameters set by hand</td><td class="tag-syn">modelled</td></tr>
+        <tr><td>Vans</td><td>Arrival time, energy wanted and hours plugged in for each van; "varied times" shifts each depot by up to ±1 h and ±30% energy</td><td>Model in <code>devices/src/sim.rs</code> and <code>closedloop/src/feeder.rs</code></td><td class="tag-syn">modelled</td></tr>
+        <tr><td>Building and other loads</td><td>First-order thermal model of the building; 10–40 kW of other consumption</td><td>Model in <code>devices/src/sim.rs</code></td><td class="tag-syn">modelled</td></tr>
+        <tr><td>Tariff</td><td>Day-ahead price + 12 ct/kWh of grid fees and levies; demand charge of 100 €/kW a year</td><td>Illustrative, of the order of German commercial tariffs</td><td class="tag-syn">assumed</td></tr>
+      </tbody>
+    </table></div>
+    <div class="data-note">
+      <h3>Why only two days? Could it run a whole year?</h3>
+      <p>The two days are the hard cases, not an average. <b>20 January 2025</b> was a <i>Dunkelflaute</i> — little wind and sun, a 583 €/MWh evening peak — exactly when German grid operators are most likely to reduce heat pumps and chargers. <b>6 April 2025</b> had deeply negative prices at midday, the situation feed-in limits exist for. Each day is simulated second by second with the real control code, which keeps the page fast.</p>
+      <p style="margin-top:8px">A whole year is possible: SMARD publishes every hour of the year, and the gateway can already fetch prices from ENTSO-E and Energy-Charts. A year also needs real weather (for example from the German Weather Service, DWD, or PVGIS) and a year of van timetables. That is <i>simulating a past year</i>, not <i>forecasting</i> one: day-ahead prices are known only one day in advance, and that is all the planner needs — it looks 24 hours ahead.</p>
+    </div>
   </section>
 
   <section class="panel" id="how">
@@ -319,14 +544,14 @@
         <text x="790" y="148" class="small">heat pump · 100 kWh battery</text>
       </g>
     </svg>
-    <div class="cols" style="margin-top:14px">
+    <div class="cols" style="margin-top:14px" data-block="howCols">
       <div><h3>Towards the DSO</h3><p>The gateway is an IEC 60870-5-104 controlled station, the protocol German DSOs require for telecontrol of plants from 100 kW. Commands are confirmed (or refused with a negative confirmation), measurements go out spontaneously with time tags, and the link runs over TLS with client certificates in the spirit of IEC 62351-3. The protocol stack is written from scratch and tested against lib60870.</p></div>
       <div><h3>Two layers of control</h3><p>A planner (MPC) looks 24 hours ahead every 15 minutes and schedules battery, cars and heat pump against prices, the demand charge, departures, comfort and battery ageing. Underneath, a real-time safety layer runs every second and follows the plan only as far as the rules allow: the consumption floor, feed-in limits, the 6 A car minimum and departure deadlines never depend on the plan being right.</p></div>
       <div><h3>Towards the devices</h3><p>Inverters and meter are found by walking the SunSpec model chain. Inverter limits are written without a revert timeout, so they stay in force if the gateway dies; chargers get a failsafe current of 6 A, which alone is below 4.2 kW. DSO commands are persisted, so a dimming survives a restart.</p></div>
     </div>
   </section>
 
-  <section class="panel" id="planning">
+  <section class="panel" id="planning" data-block="planning">
     <h2>The planning layer · what the MPC adds, measured</h2>
     <p>Each plan is a convex quadratic program over 96 quarter-hours: battery dynamics with losses and an ageing cost per kWh cycled, a first-order thermal model of the building, each car's energy request and departure time (as ISO 15118 passes them to the charger), the DSO's announced dimming window as a constraint, day-ahead prices, and a demand charge on the highest quarter-hour of import. It is solved by Clarabel, an interior-point solver written in Rust — in the gateway, in the study, and in this page. Forecast errors are handled where they matter: the battery keeps a reserve only in and just before an expected dimming, the one time a shortfall cannot be bought from the grid.</p>
     <p style="margin-top:10px">A Monte Carlo study puts a number on it: the depot over 30 random-weather days each in spring and winter, on the real prices of those days, with the DSO dimming from 17:30 to 19:30 — the same code, run 720 times.</p>
@@ -345,7 +570,7 @@
     <p style="margin-top:10px"><a href="https://github.com/maycu-byte/grid-edge-gateway/blob/main/docs/mpc.md">The formulation, the design choices and the full study →</a></p>
   </section>
 
-  <section class="panel" id="countries">
+  <section class="panel" id="countries" data-block="countries">
     <h2>Country rules · one controller, three rule sets</h2>
     <div class="scroll"><table>
       <thead><tr><th></th><th>Consumption</th><th>Feed-in</th><th>Source</th></tr></thead>
@@ -389,9 +614,10 @@
     </table></div>
   </section>
 
-  <footer>
+  <footer data-block="footer">
     Simulated site, synthetic data: 120 kWp rooftop PV, four 22 kW chargers, a 14 kW heat pump, a 100 kWh battery. Country rules as published; not legal advice. The gateway also runs as a native binary against real Modbus TCP devices — see the README. Built by Michael Hiarley Silva Andrade · <a href="https://github.com/maycu-byte">github.com/maycu-byte</a>
   </footer>
+</div>
 </div>
 <script type="module" src="app.js"></script>
 </body>

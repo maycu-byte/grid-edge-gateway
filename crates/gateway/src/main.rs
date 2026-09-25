@@ -12,6 +12,7 @@ mod field;
 mod market;
 mod persist;
 mod readings;
+mod reports;
 mod snapshot;
 #[cfg(feature = "tls")]
 mod tls;
@@ -64,10 +65,13 @@ async fn main() {
     );
     let commands = Arc::new(watch::channel(initial).0);
 
-    let mut controller = Controller::new(site.clone());
+    let reports_dir = cfg.site.reports_dir.clone().unwrap_or_else(|| reports::default_dir(&path));
+    let (report_seq, report_sha) = reports::resume(&reports_dir);
+    let mut controller = Controller::new(site.clone()).with_report_chain(report_seq, &report_sha);
     if let Some(t) = saved.totals {
         controller = controller.with_totals(t);
     }
+    info!("compliance reports in {} ({report_seq} so far)", reports_dir.display());
     info!("consumption floor while dimmed: {:.2} kW", controller.floor_kw());
 
     // Planning layer
@@ -108,6 +112,7 @@ async fn main() {
     // Until the first cycle has run, devices get conservative setpoints.
     let initial_setpoints = control::Setpoints {
         pv_limit_pct: initial.feed_in_limit_pct.min(site.policy.static_feed_in_cap_pct.unwrap_or(100.0)),
+        inverter_limit_pct: vec![],
         charger_current_a: cfg.chargers.iter().map(|c| c.failsafe_current_a).collect(),
         heat_pump_limit_kw: cfg.heat_pumps.iter().map(|h| 0.4 * h.rated_kw).collect(),
         battery_kw: vec![0.0; cfg.batteries.len()],
@@ -136,7 +141,7 @@ async fn main() {
     spawn_iec104(listener, station, cfg.iec104.tls.clone());
 
     // Dashboard API
-    let app = api::router(snapshot_rx, frames_tx, cfg.api.web_root.clone(), ems.clone());
+    let app = api::router(snapshot_rx, frames_tx, cfg.api.web_root.clone(), ems.clone(), reports_dir.clone());
     let api_listener = TcpListener::bind(cfg.api.bind).await.unwrap_or_else(|e| {
         error!("API bind {}: {e}", cfg.api.bind);
         std::process::exit(1)
@@ -146,6 +151,9 @@ async fn main() {
 
     // Control loop
     let t0 = Instant::now();
+    let mut controller = controller.with_report_epoch(now_ms());
+    let mut reports_written = 0u32;
+    let mut last_report_verdict = None;
     let mut tick = tokio::time::interval(period);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut last_fallbacks = Vec::new();
@@ -188,6 +196,14 @@ async fn main() {
             controller.set_guidance(e.lock().unwrap().guidance(unix_s));
         }
         let (sp, st) = controller.step(&clock, &cmd, &readings);
+        for r in controller.take_reports() {
+            reports::write(&reports_dir, &r);
+            if r.verdict != control::Verdict::Followed {
+                warn!("dimming report {}: {} ({:.0} s above the floor)", r.seq, r.verdict.name(), r.exceeded_s);
+            }
+            reports_written += 1;
+            last_report_verdict = Some(r.verdict.name());
+        }
         let planner = ems.as_ref().map(|e| {
             let mut e = e.lock().unwrap();
             e.observe(unix_s, &readings, st.base_load_kw, st.mode == Mode::Dimmed);
@@ -242,6 +258,7 @@ async fn main() {
                 Mode::Dimmed => "dimmed",
                 Mode::Releasing => "releasing",
             },
+            release_wait_s: st.release_wait_s,
             grid_kw: readings.grid_kw,
             pv_kw: readings.pv_kw,
             pv_available_kw: readings.pv_available_kw,
@@ -254,6 +271,7 @@ async fn main() {
             feed_in_limit_in_force_pct: st.feed_in_limit_pct,
             allowed_export_kw: st.allowed_export_kw,
             pv_limit_pct: sp.pv_limit_pct,
+            inverter_limit_pct: sp.inverter_limit_pct.clone(),
             inverters: v.inverters,
             chargers: v.chargers,
             heat_pumps: v.heat_pumps,
@@ -266,6 +284,8 @@ async fn main() {
             },
             refusals: st.refusals.iter().map(readings::refusal_name).collect(),
             fallbacks: st.fallbacks.iter().map(readings::fallback_name).collect(),
+            reports_written,
+            last_report_verdict,
             cycle_ms,
             planner,
         };
