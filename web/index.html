@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-build="eff05d490a3c">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -717,6 +717,9 @@
   </footer>
 </div>
 </div>
-<script type="module" src="app.js"></script>
+<!-- Every file is asked for with the build's version (web/stamp.sh), so a
+     browser never mixes an old module with a new one after an update. -->
+<script type="importmap">{"imports": {"./app.js": "./app.js?v=eff05d490a3c", "./i18n.js": "./i18n.js?v=eff05d490a3c", "./blocks.js": "./blocks.js?v=eff05d490a3c", "./year.js": "./year.js?v=eff05d490a3c", "./pkg/web_demo.js": "./pkg/web_demo.js?v=eff05d490a3c"}}</script>
+<script type="module" src="app.js?v=eff05d490a3c"></script>
 </body>
 </html>

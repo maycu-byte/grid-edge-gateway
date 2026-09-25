@@ -921,7 +921,8 @@ function wireSidebar() {
   addEventListener("resize", () => { fitCharts(); if (shown) drawAnim(); mark(); });
 }
 
-await init();
+// the WebAssembly file carries the same version as the page (web/stamp.sh)
+await init({ module_or_path: new URL(`./pkg/web_demo_bg.wasm?v=${document.documentElement.dataset.build}`, import.meta.url) });
 FEEDER_META = JSON.parse(feeder_meta());
 collectText();
 wire();

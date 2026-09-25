@@ -118,7 +118,7 @@ function renderAll() {
 export async function initYear(context) {
   ctx = context;
   try {
-    const r = await fetch("year2025.json");
+    const r = await fetch(`year2025.json?v=${document.documentElement.dataset.build}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     year = await r.json();
   } catch (e) {
