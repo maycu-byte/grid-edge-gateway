@@ -347,6 +347,27 @@ Object.assign(KEYS.de, {
 Object.assign(UI.pt, { "or any day:": "ou qualquer dia:" });
 Object.assign(UI.de, { "or any day:": "oder beliebiger Tag:" });
 
+Object.assign(T.en, {
+  countries: { DE: "Germany", AT: "Austria", CH: "Switzerland" },
+  cities: { stuttgart: "Stuttgart", vienna: "Vienna", zurich: "Zurich" },
+  extremesNote: (c, x) => `The buttons are the extreme days of 2025 in Germany. The same days in ${T.en.countries[c]}: ${x.dunkel}; ${x.neg}; ${x.cold}; ${x.heat}. Prices from SMARD, measured weather.`,
+  dayPeak: (d, v, h) => `${d}, ${v} at ${h}:00`, dayLow: (d, v, h) => `${d}, ${v} at ${h}:00`, dayCold: (d, t) => `${d}, mean ${t}`, dayHot: (d, t) => `${d}, up to ${t}`,
+  priceKey: (z, hi, hiAt, lo, loAt) => `2025 in ${z}: highest ${hi} (${hiAt}), lowest ${lo} (${loAt})`,
+});
+Object.assign(T.pt, {
+  countries: { DE: "Alemanha", AT: "Áustria", CH: "Suíça" },
+  cities: { stuttgart: "Stuttgart", vienna: "Viena", zurich: "Zurique" },
+  extremesNote: (c, x) => `Os botões são os dias extremos de 2025 na Alemanha. Os mesmos dias na ${T.pt.countries[c]}: ${x.dunkel}; ${x.neg}; ${x.cold}; ${x.heat}. Preços do SMARD, clima medido.`,
+  dayPeak: (d, v, h) => `${d}, ${v} às ${h}:00`, dayLow: (d, v, h) => `${d}, ${v} às ${h}:00`, dayCold: (d, t) => `${d}, média de ${t}`, dayHot: (d, t) => `${d}, até ${t}`,
+  priceKey: (z, hi, hiAt, lo, loAt) => `2025 na zona ${z}: máximo de ${hi} (${hiAt}), mínimo de ${lo} (${loAt})`,
+});
+Object.assign(T.de, {
+  countries: { DE: "Deutschland", AT: "Österreich", CH: "Schweiz" },
+  cities: { stuttgart: "Stuttgart", vienna: "Wien", zurich: "Zürich" },
+  extremesNote: (c, x) => `Die Schaltflächen sind die Extremtage 2025 in Deutschland. Dieselben Tage ${{ DE: "in Deutschland", AT: "in Österreich", CH: "in der Schweiz" }[c]}: ${x.dunkel}; ${x.neg}; ${x.cold}; ${x.heat}. Preise von SMARD, gemessenes Wetter.`,
+  dayPeak: (d, v, h) => `${d}, ${v} um ${h}:00`, dayLow: (d, v, h) => `${d}, ${v} um ${h}:00`, dayCold: (d, t) => `${d}, Mittel ${t}`, dayHot: (d, t) => `${d}, bis ${t}`,
+  priceKey: (z, hi, hiAt, lo, loAt) => `2025 in ${z}: Höchstwert ${hi} (${hiAt}), Tiefstwert ${lo} (${loAt})`,
+});
 Object.assign(T.en, { restartDay: "The day is over: press to start it again" });
 Object.assign(T.pt, { restartDay: "O dia terminou: clique para recomeçar" });
 Object.assign(T.de, { restartDay: "Der Tag ist vorbei: klicken, um neu zu starten" });

@@ -6,11 +6,11 @@
 //! which German DSOs are most likely to dim heat pumps and chargers.
 //!
 //! Any day of 2025 can also be simulated on its real data: the day-ahead
-//! prices of that day and the measured sun and temperature of Stuttgart
-//! (`year2025_data`).
+//! prices of that day in the country's bidding zone and the measured sun and
+//! temperature of Stuttgart, Vienna or Zurich (`year2025_data`).
 
 use crate::prices_data::{SPRING_EUR_MWH, WINTER_EUR_MWH};
-use crate::year2025_data::{GHI_W_M2, PRICE_EUR_MWH, TEMP_C};
+use crate::year2025_data::{GHI_AT, GHI_CH, GHI_DE, PRICE_AT, PRICE_CH, PRICE_DE, TEMP_AT, TEMP_CH, TEMP_DE};
 
 /// Days in each month of 2025.
 const MONTH_DAYS: [u16; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -19,9 +19,49 @@ const MONTH_DAYS: [u16; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const CEST_DAYS: std::ops::RangeInclusive<u16> = 89..=298;
 /// Unix time of 1 January 2025, 00:00 CET, ms.
 const EPOCH_2025_MS: i64 = 1_735_686_000_000;
-/// Site latitude and longitude (Stuttgart), degrees.
-const LAT_DEG: f64 = 48.78;
-const LON_DEG: f64 = 9.18;
+/// Hours in the 2025 series.
+const HOURS_2025: usize = 8760;
+
+/// Where a real day of 2025 is taken from: the bidding zone for the prices
+/// and a city of that country for the weather.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zone {
+    /// DE-LU, weather of Stuttgart.
+    De,
+    /// AT, weather of Vienna.
+    At,
+    /// CH, weather of Zurich.
+    Ch,
+}
+
+impl Zone {
+    /// "DE", "AT" or "CH".
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_uppercase().as_str() {
+            "DE" => Some(Zone::De),
+            "AT" => Some(Zone::At),
+            "CH" => Some(Zone::Ch),
+            _ => None,
+        }
+    }
+
+    /// Latitude and longitude of the weather point, degrees.
+    fn coordinates(self) -> (f64, f64) {
+        match self {
+            Zone::De => (48.78, 9.18),
+            Zone::At => (48.21, 16.37),
+            Zone::Ch => (47.38, 8.54),
+        }
+    }
+
+    fn series(self) -> (&'static [f32; HOURS_2025], &'static [f32; HOURS_2025], &'static [u16; HOURS_2025]) {
+        match self {
+            Zone::De => (&PRICE_DE, &TEMP_DE, &GHI_DE),
+            Zone::At => (&PRICE_AT, &TEMP_AT, &GHI_AT),
+            Zone::Ch => (&PRICE_CH, &TEMP_CH, &GHI_CH),
+        }
+    }
+}
 /// Share of the horizontal irradiance the rooftop PV turns into AC power
 /// (performance ratio, per 1000 W/m²).
 const PERFORMANCE_RATIO: f64 = 0.85;
@@ -30,8 +70,8 @@ const PERFORMANCE_RATIO: f64 = 0.85;
 pub enum Season {
     Spring,
     Winter,
-    /// A real day of 2025, 0 = 1 January.
-    Day(u16),
+    /// A real day of 2025 (0 = 1 January) in a country.
+    Day(u16, Zone),
 }
 
 impl Season {
@@ -50,21 +90,29 @@ impl Season {
         if y != "2025" || it.next().is_some() || !(1..=12).contains(&m) || d == 0 || d > MONTH_DAYS[m as usize - 1] {
             return None;
         }
-        Some(Season::Day(MONTH_DAYS[..m as usize - 1].iter().sum::<u16>() + d - 1))
+        Some(Season::Day(MONTH_DAYS[..m as usize - 1].iter().sum::<u16>() + d - 1, Zone::De))
     }
 
     pub fn name(self) -> &'static str {
         match self {
             Season::Spring => "spring",
             Season::Winter => "winter",
-            Season::Day(_) => "2025",
+            Season::Day(..) => "2025",
+        }
+    }
+
+    /// The same day in another country; the two study days stay as they are.
+    pub fn in_zone(self, zone: Zone) -> Self {
+        match self {
+            Season::Day(d, _) => Season::Day(d, zone),
+            s => s,
         }
     }
 
     /// "spring", "winter" or the date, e.g. "2025-01-20".
     pub fn label(self) -> String {
         match self {
-            Season::Day(d) => {
+            Season::Day(d, _) => {
                 let (m, day) = month_day(d);
                 format!("2025-{:02}-{:02}", m + 1, day + 1)
             }
@@ -77,7 +125,7 @@ impl Season {
         match self {
             Season::Spring => 1_743_890_400_000, // 2025-04-06 00:00 CEST
             Season::Winter => 1_737_327_600_000, // 2025-01-20 00:00 CET
-            Season::Day(d) => {
+            Season::Day(d, _) => {
                 let summer = if CEST_DAYS.contains(&d) { 3_600_000 } else { 0 };
                 EPOCH_2025_MS + d as i64 * 86_400_000 - summer
             }
@@ -113,7 +161,7 @@ pub struct Climate {
     pub cloud_std: f64,
     pub cloud_worst: f64,
     /// A real day of 2025: sun, temperature and prices come from the data.
-    pub actual_day: Option<u16>,
+    pub actual_day: Option<(u16, Zone)>,
 }
 
 impl Climate {
@@ -148,34 +196,36 @@ impl Climate {
                 cloud_worst: 0.15,
                 actual_day: None,
             },
-            Season::Day(d) => Self::of_day(d),
+            Season::Day(d, z) => Self::of_day(d, z),
         }
     }
 
     /// A real day: the sun's path at the site, the cloudiness climatology of
     /// the half-year (for the forecaster), measured weather for the rest.
-    fn of_day(d: u16) -> Self {
+    fn of_day(d: u16, zone: Zone) -> Self {
+        let (lat_deg, lon_deg) = zone.coordinates();
+        let (_, temps, _) = zone.series();
         let (month, _) = month_day(d);
         let base = Self::of(if (3..=8).contains(&month) { Season::Spring } else { Season::Winter });
         let n = d as f64 + 1.0;
         let decl = (-23.44f64).to_radians() * (std::f64::consts::TAU * (n + 10.0) / 365.0).cos();
-        let lat = LAT_DEG.to_radians();
+        let lat = lat_deg.to_radians();
         let half_day_h = (-lat.tan() * decl.tan()).clamp(-1.0, 1.0).acos().to_degrees() / 15.0;
         // Solar noon on the local clock: longitude, and an hour later in summer time.
         let summer = if (88..=297).contains(&d) { 1.0 } else { 0.0 };
-        let noon_h = 12.0 + (15.0 - LON_DEG) / 15.0 + summer;
-        let elevation = (90.0 - LAT_DEG).to_radians() + decl;
-        let hours = (d as usize * 24..d as usize * 24 + 24).map(|i| TEMP_C[i] as f64);
+        let noon_h = 12.0 + (15.0 - lon_deg) / 15.0 + summer;
+        let elevation = (90.0 - lat_deg).to_radians() + decl;
+        let hours = (d as usize * 24..d as usize * 24 + 24).map(|i| temps[i] as f64);
         let (lo, hi) = hours.fold((f64::MAX, f64::MIN), |(a, b), t| (a.min(t), b.max(t)));
         Climate {
-            season: Season::Day(d),
+            season: Season::Day(d, zone),
             sunrise_h: noon_h - half_day_h,
             sunset_h: noon_h + half_day_h,
             // Clear-sky horizontal irradiance ~ 1100 W/m² · sin(elevation)^1.15.
             clear_peak: PERFORMANCE_RATIO * 1.1 * elevation.sin().powf(1.15),
             t_mean_c: (lo + hi) / 2.0,
             t_amp_c: (hi - lo) / 2.0,
-            actual_day: Some(d),
+            actual_day: Some((d, zone)),
             ..base
         }
     }
@@ -183,9 +233,9 @@ impl Climate {
     /// Index into the 2025 series and the fraction towards the next hour,
     /// for hourly means centred on the half hour.
     fn hour_at(d: u16, t_s: f64) -> (usize, usize, f64) {
-        let x = (d as f64 * 24.0 + t_s / 3600.0 - 0.5).clamp(0.0, (PRICE_EUR_MWH.len() - 1) as f64);
+        let x = (d as f64 * 24.0 + t_s / 3600.0 - 0.5).clamp(0.0, (HOURS_2025 - 1) as f64);
         let i = x.floor() as usize;
-        (i, (i + 1).min(PRICE_EUR_MWH.len() - 1), x - i as f64)
+        (i, (i + 1).min(HOURS_2025 - 1), x - i as f64)
     }
 
     /// PV available from the sun, fraction of installed power, with the
@@ -193,9 +243,10 @@ impl Climate {
     /// irradiance already has its clouds).
     pub fn solar_fraction(&self, t_s: f64, cloud: f64) -> f64 {
         match self.actual_day {
-            Some(d) => {
+            Some((d, zone)) => {
+                let (_, _, ghis) = zone.series();
                 let (i, j, f) = Self::hour_at(d, t_s);
-                let ghi = GHI_W_M2[i] as f64 * (1.0 - f) + GHI_W_M2[j] as f64 * f;
+                let ghi = ghis[i] as f64 * (1.0 - f) + ghis[j] as f64 * f;
                 (ghi / 1000.0 * PERFORMANCE_RATIO).clamp(0.0, 1.0)
             }
             None => self.clear_sky_fraction(t_s) * cloud,
@@ -214,9 +265,10 @@ impl Climate {
     }
 
     pub fn outdoor_c(&self, t_s: f64) -> f64 {
-        if let Some(d) = self.actual_day {
+        if let Some((d, zone)) = self.actual_day {
+            let (_, temps, _) = zone.series();
             let (i, j, f) = Self::hour_at(d, t_s);
-            return TEMP_C[i] as f64 * (1.0 - f) + TEMP_C[j] as f64 * f;
+            return temps[i] as f64 * (1.0 - f) + temps[j] as f64 * f;
         }
         let day = (t_s / 3600.0 - self.t_peak_h) / 24.0 * std::f64::consts::TAU;
         self.t_mean_c + self.t_amp_c * day.cos()
@@ -228,9 +280,10 @@ impl Climate {
         let series = match self.season {
             Season::Spring => &SPRING_EUR_MWH,
             Season::Winter => &WINTER_EUR_MWH,
-            Season::Day(d) => {
-                let i = (d as f64 * 24.0 + (t_s / 3600.0).floor()).clamp(0.0, (PRICE_EUR_MWH.len() - 1) as f64);
-                return PRICE_EUR_MWH[i as usize] as f64;
+            Season::Day(d, zone) => {
+                let (prices, _, _) = zone.series();
+                let i = (d as f64 * 24.0 + (t_s / 3600.0).floor()).clamp(0.0, (HOURS_2025 - 1) as f64);
+                return prices[i as usize] as f64;
             }
         };
         let i = (t_s / 3600.0).floor().clamp(0.0, (series.len() - 1) as f64) as usize;
@@ -247,7 +300,7 @@ impl Climate {
             Season::Winter if u < 0.55 => 0.5 + 0.3 * r,
             Season::Winter => 0.15 + 0.25 * r,
             // A real day has measured sun; the draw is not used.
-            Season::Day(_) => 1.0,
+            Season::Day(..) => 1.0,
         }
     }
 }
@@ -304,7 +357,7 @@ mod tests {
     #[test]
     fn a_real_day_matches_the_two_study_days() {
         let jan20 = Season::parse("2025-01-20").unwrap();
-        assert_eq!(jan20, Season::Day(19));
+        assert_eq!(jan20, Season::Day(19, Zone::De));
         assert_eq!(jan20.label(), "2025-01-20");
         assert_eq!(jan20.epoch_ms(), Season::Winter.epoch_ms());
         assert_eq!(Season::parse("2025-04-06").unwrap().epoch_ms(), Season::Spring.epoch_ms());
@@ -313,6 +366,21 @@ mod tests {
         let s = Climate::of(Season::parse("2025-04-06").unwrap());
         assert!((s.day_ahead_eur_mwh(14.5 * 3600.0) + 114.57).abs() < 0.01);
         assert!(Season::parse("2025-02-29").is_none() && Season::parse("2024-01-01").is_none());
+    }
+
+    #[test]
+    fn each_country_has_its_own_prices_and_weather() {
+        let jan20 = Season::parse("2025-01-20").unwrap();
+        let de = Climate::of(jan20);
+        let at = Climate::of(jan20.in_zone(Zone::At));
+        let ch = Climate::of(jan20.in_zone(Zone::Ch));
+        let evening = 17.5 * 3600.0;
+        assert!((at.day_ahead_eur_mwh(evening) - 561.75).abs() < 0.01, "AT peak of 2025");
+        assert!(ch.day_ahead_eur_mwh(evening) < de.day_ahead_eur_mwh(evening));
+        assert_ne!(at.outdoor_c(12.0 * 3600.0), de.outdoor_c(12.0 * 3600.0));
+        // Vienna lies 7° east of Stuttgart: its sun rises about half an hour earlier
+        assert!(de.sunrise_h - at.sunrise_h > 0.4);
+        assert_eq!(Season::Winter.in_zone(Zone::At), Season::Winter);
     }
 
     #[test]

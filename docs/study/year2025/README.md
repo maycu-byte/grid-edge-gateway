@@ -1,7 +1,7 @@
 # 2025, evening by evening
 
-Every evening of 2025 on its real data, for a feeder of 20 depots
-(`crates/closedloop/src/bin/year.rs`):
+Every evening of 2025 on its real data, for a feeder of 20 depots in Germany
+(`crates/closedloop/src/bin/year.rs`). The live demo uses the Austrian and Swiss series when that country is chosen:
 
 ```text
 cargo run --release -p closedloop --bin year -- --sites 20 --out docs/study/year2025
@@ -14,15 +14,15 @@ transformer sizes). The web demo reads a copy of `year.json` in
 
 ## Data
 
-`crates/devices/src/year2025_data.rs` holds 2025 in German local time,
+`crates/devices/src/year2025_data.rs` holds 2025 in local time (CET/CEST, the same in the three countries) for each country,
 365 days × 24 hours (hour 0 = 1 January 00:00 CET; summer time from
 30 March to 26 October, the missing hour taking 03:00's values and the
 repeated one its first pass).
 
 | Series | Source | Licence |
 |---|---|---|
-| Day-ahead price, bidding zone DE-LU, €/MWh | Bundesnetzagentur \| SMARD.de, fetched through the Energy-Charts API (`api.energy-charts.info/price?bzn=DE-LU`). Hourly until 30 September 2025; from 1 October the mean of the four 15-minute products of each hour. | CC BY 4.0 |
-| Air temperature at 2 m, °C | Open-Meteo historical weather archive (ERA5 reanalysis, Copernicus Climate Change Service / ECMWF), 48.78 N 9.18 E (Stuttgart), hourly | CC BY 4.0 |
+| Day-ahead price, bidding zones DE-LU, AT and CH, €/MWh | Bundesnetzagentur \| SMARD.de, fetched through the Energy-Charts API (`api.energy-charts.info/price?bzn=DE-LU`, `AT`, `CH`). DE-LU and AT hourly until 30 September 2025, then the mean of the four 15-minute products of each hour; CH hourly all year. | CC BY 4.0 |
+| Air temperature at 2 m, °C | Open-Meteo historical weather archive (ERA5 reanalysis, Copernicus Climate Change Service / ECMWF), hourly, at Stuttgart (48.78 N 9.18 E), Vienna (48.21 N 16.37 E) and Zurich (47.38 N 8.54 E) | CC BY 4.0 |
 | Global horizontal irradiance, W/m² | same, `shortwave_radiation`, mean over the hour | CC BY 4.0 |
 
 Checks: the series reproduce the two study days exactly, with 583.40 €/MWh on

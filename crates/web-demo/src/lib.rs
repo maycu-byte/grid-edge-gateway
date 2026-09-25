@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use closedloop::{ClosedLoop, Scenario, Strategy, site_config};
 use control::{Controller, Jurisdiction, Mode, Totals};
-use devices::climate::{Season, Tariff};
+use devices::climate::{Climate, Season, Tariff, Zone};
 use devices::sim::{Building, DeviceId, Weather};
 use iec104::describe::describe;
 use iec104::{Apdu, Asdu, Cause, Cp56Time2a, Element, Quality, UFunction};
@@ -262,7 +262,8 @@ impl Demo {
     #[wasm_bindgen(constructor)]
     pub fn new(start_hour: f64, seed: u32, country: &str, season: &str, strategy: &str) -> Demo {
         let j = Jurisdiction::parse(country).unwrap_or(Jurisdiction::De);
-        let season = Season::parse(season).unwrap_or(Season::Spring);
+        // a day of 2025 runs on the prices and weather of the chosen country
+        let season = Season::parse(season).unwrap_or(Season::Spring).in_zone(Zone::parse(country).unwrap_or(Zone::De));
         let strategy = Strategy::parse(strategy).unwrap_or(Strategy::Rules);
         let cl = new_loop(j, season, strategy, start_hour, seed as u64);
         let shadow = new_loop(j, season, Strategy::Rules, start_hour, seed as u64);
@@ -610,6 +611,53 @@ pub fn feeder_site(
         mixed,
     };
     serde_json::to_string(&closedloop::run_site(&case, seed as u64, index as usize)).unwrap_or_default()
+}
+
+/// A day of 2025 in a country ("DE", "AT", "CH"; date "2025-01-20"): its
+/// highest and lowest day-ahead price and their hours, mean and highest
+/// temperature, and the energy 1 kWp of PV could make. Empty for other days.
+#[wasm_bindgen]
+pub fn day_summary_json(country: &str, date: &str) -> String {
+    let Some(season) = Season::parse(date).filter(|s| matches!(s, Season::Day(..))) else {
+        return String::new();
+    };
+    let c = Climate::of(season.in_zone(Zone::parse(country).unwrap_or(Zone::De)));
+    let prices: Vec<f64> = (0..24).map(|h| c.day_ahead_eur_mwh(h as f64 * 3600.0 + 1.0)).collect();
+    let temps: Vec<f64> = (0..24).map(|h| c.outdoor_c(h as f64 * 3600.0 + 1800.0)).collect();
+    let (hi_h, hi) =
+        prices.iter().cloned().enumerate().fold((0, f64::MIN), |a, (h, p)| if p > a.1 { (h, p) } else { a });
+    let (lo_h, lo) =
+        prices.iter().cloned().enumerate().fold((0, f64::MAX), |a, (h, p)| if p < a.1 { (h, p) } else { a });
+    let pv: f64 = (0..24).map(|h| c.solar_fraction(h as f64 * 3600.0 + 1800.0, 1.0)).sum();
+    serde_json::json!({
+        "price_max": hi, "price_max_h": hi_h, "price_min": lo, "price_min_h": lo_h,
+        "temp_mean": temps.iter().sum::<f64>() / 24.0,
+        "temp_max": temps.iter().cloned().fold(f64::MIN, f64::max),
+        "pv_kwh_per_kwp": pv,
+    })
+    .to_string()
+}
+
+/// The highest and lowest day-ahead price of 2025 in a country's bidding
+/// zone, with date and hour.
+#[wasm_bindgen]
+pub fn year_extremes_json(country: &str) -> String {
+    let zone = Zone::parse(country).unwrap_or(Zone::De);
+    let (mut hi, mut lo) = ((f64::MIN, 0u16, 0usize), (f64::MAX, 0u16, 0usize));
+    for d in 0..365u16 {
+        let c = Climate::of(Season::Day(d, zone));
+        for h in 0..24 {
+            let p = c.day_ahead_eur_mwh(h as f64 * 3600.0 + 1.0);
+            if p > hi.0 {
+                hi = (p, d, h);
+            }
+            if p < lo.0 {
+                lo = (p, d, h);
+            }
+        }
+    }
+    let date = |d: u16| Season::Day(d, zone).label();
+    serde_json::json!({ "max": hi.0, "max_date": date(hi.1), "max_h": hi.2, "min": lo.0, "min_date": date(lo.1), "min_h": lo.2 }).to_string()
 }
 
 /// The window and resolution of `feeder_site`'s load curve.
