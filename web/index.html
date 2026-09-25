@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-build="eff05d490a3c">
+<html lang="en" data-build="39fa9beccecf">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -77,6 +77,15 @@
   .day-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-weight: 400; font-size: .82rem; color: var(--ink3); }
   .day-row .seg { flex: 1 1 260px; }
 
+  /* flexible connection */
+  .flex-body { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 24px; margin-top: 14px; align-items: start; }
+  @media (max-width: 960px) { .flex-body { grid-template-columns: 1fr; } }
+  .flex-controls { display: flex; flex-direction: column; gap: 12px; }
+  #f-district { width: 100%; }
+  #f-chart { width: 100%; height: auto; display: block; }
+  #f-chart text { font: 12px var(--sans); fill: var(--ink3); }
+  #f-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 8px; }
+  @media (max-width: 760px) { #f-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   /* models */
   .models { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-top: 14px; }
   @media (max-width: 560px) { .models { grid-template-columns: 1fr; } }
@@ -320,6 +329,7 @@
     <a class="brand" href="#top">Grid Edge Gateway</a>
     <a class="nav" href="#context">What is simulated?</a>
     <a class="nav" href="#demo">Live demo</a>
+    <a class="nav" href="#flex">Flexible connection</a>
     <a class="nav" href="#calculator">Feeder calculator</a>
     <a class="nav" href="#year">2025, day by day</a>
     <a class="nav" href="#data">Data sources</a>
@@ -474,6 +484,29 @@
   <section class="panel">
     <div class="loghead"><h2>IEC 60870-5-104 frames on the DSO link</h2><label><input type="checkbox" id="hex"> show raw bytes</label></div>
     <div class="log" id="log" aria-live="off"></div>
+  </section>
+
+  <section class="panel flex" id="flex" aria-labelledby="flex-h">
+    <h2 id="flex-h" data-i18n="fTitle">Flexible connection: the site side of the capacity map</h2>
+    <p class="calc-intro" data-i18n-html="fIntro">Since 2025 a German grid operator may connect a plant beyond the grid's firm capacity if the plant accepts a limit (§ 17 (2b) EnWG). The <a href="https://maycu-byte.github.io/grid-solar-map/" target="_blank" rel="noopener">capacity map</a> found, for each HV/MV district of the Saarland, the day of 2025 on which flexible plants lose the most, and the share of their output allowed in each hour. Play that day here: the grid operator sends the limit over IEC 104 every five minutes, and the gateway keeps the depot's export under it, using the energy on site and in the battery before it curtails the PV.</p>
+    <div class="flex-body">
+      <div class="flex-controls">
+        <div class="field"><span data-i18n="fDistrict">District</span>
+          <select id="f-district" class="day-pick" aria-label="District"></select>
+        </div>
+        <div class="field"><span data-i18n="fRule">Curtailment rule</span>
+          <div class="seg" id="f-rule"><button data-v="pro" aria-pressed="true" data-i18n="fPro">Pro rata</button><button data-v="lifo" aria-pressed="false" data-i18n="fLifo">Last in, first out (last plant)</button></div>
+        </div>
+        <div class="calc-actions"><button class="primary" id="f-play" data-i18n="fPlay">Play this day in the demo</button></div>
+        <p class="muted" id="f-note"></p>
+        <p class="muted"><a id="f-map" href="https://maycu-byte.github.io/grid-solar-map/" target="_blank" rel="noopener" data-i18n="fMap">See the districts on the capacity map</a></p>
+      </div>
+      <div class="flex-view">
+        <p class="muted" data-i18n="fChart">Share of a flexible plant's output the substation allows, hour by hour</p>
+        <svg id="f-chart" viewBox="0 0 600 170" role="img" aria-label="Allowed export per hour"></svg>
+        <div class="calc-kpis" id="f-stats"></div>
+      </div>
+    </div>
   </section>
 
   <section class="panel calc" id="calculator" aria-labelledby="calc-h">
@@ -719,7 +752,7 @@
 </div>
 <!-- Every file is asked for with the build's version (web/stamp.sh), so a
      browser never mixes an old module with a new one after an update. -->
-<script type="importmap">{"imports": {"./app.js": "./app.js?v=eff05d490a3c", "./i18n.js": "./i18n.js?v=eff05d490a3c", "./blocks.js": "./blocks.js?v=eff05d490a3c", "./year.js": "./year.js?v=eff05d490a3c", "./pkg/web_demo.js": "./pkg/web_demo.js?v=eff05d490a3c"}}</script>
-<script type="module" src="app.js?v=eff05d490a3c"></script>
+<script type="importmap">{"imports": {"./app.js": "./app.js?v=39fa9beccecf", "./i18n.js": "./i18n.js?v=39fa9beccecf", "./blocks.js": "./blocks.js?v=39fa9beccecf", "./flex.js": "./flex.js?v=39fa9beccecf", "./year.js": "./year.js?v=39fa9beccecf", "./pkg/web_demo.js": "./pkg/web_demo.js?v=39fa9beccecf"}}</script>
+<script type="module" src="app.js?v=39fa9beccecf"></script>
 </body>
 </html>

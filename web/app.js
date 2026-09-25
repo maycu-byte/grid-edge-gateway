@@ -2,6 +2,7 @@ import init, { Demo, feeder_site, feeder_meta, day_summary_json, year_extremes_j
 import { LOCALE, UI, KEYS, T } from "./i18n.js";
 import { BLOCKS, EXTRA } from "./blocks.js";
 import { initYear, refreshYear } from "./year.js";
+import { flexStart, flexTick, initFlex, refreshFlex } from "./flex.js";
 
 const $ = (s) => document.querySelector(s);
 const SEED = 7;
@@ -66,6 +67,7 @@ function applyLanguage(v) {
   if (calcRows.length) renderCompare();
   if (shown) { renderFeederKpis(shown.s, shown.m); drawAnim(); }
   refreshYear();
+  refreshFlex();
 }
 
 // Numbers in the reader's locale: 1.5 / 1,5 and 1,000 / 1.000.
@@ -124,6 +126,7 @@ function start(hour, opts = {}) {
   press("#strategy-seg", strategy);
   countryTexts();
   $("#log").replaceChildren();
+  flexStart(opts.flex);
   setPlaying(true);
   tick(0);
   fitCharts();
@@ -218,6 +221,7 @@ function tick(simSeconds) {
       exportLimit: state.feed_in_in_force_pct < 100 ? -state.allowed_export_kw : null,
     });
   }
+  flexTick(simSeconds);
   appendFrames(JSON.parse(demo.take_frames_json()));
   render();
 }
@@ -930,6 +934,7 @@ wireCalculator();
 wireSidebar();
 applyLanguage(pickLanguage());
 if (!scripted()) start(6);
+initFlex({ L: () => L, nf, css, press, onSeg, locale: () => LOCALE[lang], lang: () => lang, start, demo: () => demo, state: () => state });
 document.fonts?.ready.then(fitCharts);
 initYear({
   L: () => L,
