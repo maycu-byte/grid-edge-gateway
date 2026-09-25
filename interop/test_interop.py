@@ -52,14 +52,23 @@ def free_port_block(n):
     raise RuntimeError("no free port block")
 
 
-def wait_port(port, timeout=15):
+def wait_port(port, timeout=15, proc=None):
+    """Waits for a listening port; fails at once if `proc` has exited."""
     end = time.time() + timeout
     while time.time() < end:
+        if proc is not None and proc.poll() is not None:
+            raise TimeoutError(f"port {port}: the process exited with code {proc.returncode}")
         with socket.socket() as s:
             if s.connect_ex(("127.0.0.1", port)) == 0:
                 return
         time.sleep(0.1)
     raise TimeoutError(f"port {port} did not open")
+
+
+# A free port found by binding and closing can be taken by another socket
+# before the process under test binds it (CI runners are busy). Starting is
+# therefore retried on a fresh block of ports.
+START_ATTEMPTS = 3
 
 
 def wait_until(pred, timeout=10, step=0.2):
@@ -79,10 +88,7 @@ class Site:
     ):
         self.tmp = tmp
         self.tls = tls
-        self.base = free_port_block(12)
-        self.http = self.base + 9
-        self.iec = self.base + 10
-        self.api = self.base + 11
+        self.new_ports()
         self.jurisdiction = jurisdiction
         self.site_extra = site_extra
         self.policy = policy
@@ -90,6 +96,16 @@ class Site:
         self.extra = extra
         self.start = start
         self.procs = {}
+
+    def new_ports(self):
+        self.base = free_port_block(12)
+        self.http = self.base + 9
+        self.iec = self.base + 10
+        self.api = self.base + 11
+
+    def log(self, name):
+        path = self.tmp / f"{name}.log"
+        return path.read_text(errors="replace")[-2000:] if path.exists() else ""
 
     def config(self):
         b = self.base
@@ -154,15 +170,15 @@ bind = "127.0.0.1:{self.api}"
 {self.extra}
 """
 
-    def start_sim(self):
+    def _spawn_sim(self):
         self.procs["sim"] = subprocess.Popen(
             [TARGET / f"site-sim{EXE}", "--start", self.start, "--base-port", str(self.base), "--http-port", str(self.http)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=open(self.tmp / "site-sim.log", "ab"),
+            stderr=subprocess.STDOUT,
         )
-        wait_port(self.http)
+        wait_port(self.http, proc=self.procs["sim"])
 
-    def start_gateway(self):
+    def _spawn_gateway(self):
         cfg = self.tmp / "gateway.toml"
         cfg.write_text(self.config())
         self.procs["gw"] = subprocess.Popen(
@@ -170,8 +186,32 @@ bind = "127.0.0.1:{self.api}"
             stdout=open(self.tmp / "gateway.log", "ab"),
             stderr=subprocess.STDOUT,
         )
-        wait_port(self.api)
-        wait_port(self.iec)
+        wait_port(self.api, proc=self.procs["gw"])
+        wait_port(self.iec, proc=self.procs["gw"])
+
+    def start_sim(self):
+        for attempt in range(START_ATTEMPTS):
+            try:
+                self._spawn_sim()
+                return
+            except TimeoutError as e:
+                self.close()
+                if attempt == START_ATTEMPTS - 1:
+                    raise TimeoutError(f"{e}; site-sim log:\n{self.log('site-sim')}") from e
+                self.new_ports()
+
+    def start_gateway(self):
+        for attempt in range(START_ATTEMPTS):
+            try:
+                self._spawn_gateway()
+                break
+            except TimeoutError as e:
+                if attempt == START_ATTEMPTS - 1:
+                    raise TimeoutError(f"{e}; gateway log:\n{self.log('gateway')}") from e
+                # the gateway's ports depend on the simulator's: start both again on new ports
+                self.close()
+                self.new_ports()
+                self.start_sim()
         # First control cycles with all devices online.
         assert wait_until(lambda: self.snapshot()["fallbacks"] == [] and self.snapshot()["grid_kw"] is not None)
 
@@ -200,6 +240,7 @@ bind = "127.0.0.1:{self.api}"
         for p in self.procs.values():
             p.kill()
             p.wait()
+        self.procs = {}
 
 
 class Dso:
