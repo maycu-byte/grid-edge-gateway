@@ -219,9 +219,22 @@
   th { font-size: .76rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink3); border-top: 0; }
   td.mono { white-space: nowrap; }
   .scroll { overflow-x: auto; }
-  #arch { width: 100%; height: auto; display: block; max-width: 980px; }
-  #arch text { font: 13px var(--sans); fill: var(--ink); }
-  #arch .small { font-size: 11.5px; fill: var(--ink2); }
+  .arch { display: grid; grid-template-columns: minmax(0, 1fr) minmax(90px, auto) minmax(0, 1.5fr) minmax(90px, auto) minmax(0, 1fr); align-items: center; gap: 0 4px; }
+  .arch .box { background: var(--sunk); border: 1px solid var(--hair); border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; font-size: .86rem; color: var(--ink2); min-width: 0; }
+  .arch .box b { color: var(--ink); font-size: .95rem; margin-bottom: 2px; }
+  .arch .box.core { background: var(--surface); border: 1.5px solid var(--accent); }
+  .arch .link { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: .78rem; color: var(--ink2); text-align: center; padding: 0 4px; }
+  .arch .link i { position: relative; display: block; width: 100%; min-width: 70px; height: 2px; background: var(--ink2); }
+  .arch .link i::before, .arch .link i::after { content: ""; position: absolute; top: -5px; border: 6px solid transparent; }
+  .arch .link i::before { left: -6px; border-right-color: var(--ink2); }
+  .arch .link i::after { right: -6px; border-left-color: var(--ink2); }
+  @media (max-width: 860px) {
+    .arch { grid-template-columns: 1fr; gap: 6px; }
+    .arch .link { flex-direction: row; justify-content: center; gap: 12px; }
+    .arch .link i { width: 2px; min-width: 0; height: 34px; }
+    .arch .link i::before { left: -5px; top: -6px; border: 6px solid transparent; border-bottom-color: var(--ink2); }
+    .arch .link i::after { left: -5px; right: auto; top: auto; bottom: -6px; border: 6px solid transparent; border-top-color: var(--ink2); }
+  }
   header .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
   .seg.lang { flex: none; }
   .seg.lang button { padding: 5px 12px; font-weight: 600; }
@@ -583,34 +596,13 @@
 
   <section class="panel" id="how">
     <h2>How it works</h2>
-    <svg id="arch" viewBox="0 0 980 190" role="img" aria-label="Architecture: DSO control centre, gateway, field devices">
-      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="currentColor" style="color:var(--ink2)"/></marker></defs>
-      <g style="color:var(--ink2)">
-        <rect x="10" y="40" width="200" height="110" rx="10" fill="var(--sunk)" stroke="var(--hair)"/>
-        <text x="110" y="74" text-anchor="middle" font-weight="600">DSO control centre</text>
-        <text x="110" y="98" text-anchor="middle" class="small">SCADA · Netzleitstelle</text>
-        <text x="110" y="120" text-anchor="middle" class="small">tested with c104 / lib60870</text>
-        <line x1="212" y1="95" x2="318" y2="95" stroke="currentColor" stroke-width="2" marker-start="url(#ar)" marker-end="url(#ar)"/>
-        <text x="265" y="82" text-anchor="middle" class="small">IEC 104</text>
-        <text x="265" y="116" text-anchor="middle" class="small">TLS, client certs</text>
-        <rect x="320" y="20" width="340" height="150" rx="10" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.5"/>
-        <text x="490" y="46" text-anchor="middle" font-weight="600">grid-edge-gateway (Rust)</text>
-        <text x="340" y="70" class="small">iec104 — controlled station, sans-IO link layer</text>
-        <text x="340" y="92" class="small">planner — MPC: 24 h convex QP every 15 min</text>
-        <text x="340" y="114" class="small">control — safety layer: DE/AT/CH rules, allocation</text>
-        <text x="340" y="136" class="small">field — SunSpec discovery, watchdogs, reconnect</text>
-        <text x="340" y="158" class="small">api — JSON / WebSocket for this dashboard</text>
-        <line x1="662" y1="95" x2="768" y2="95" stroke="currentColor" stroke-width="2" marker-start="url(#ar)" marker-end="url(#ar)"/>
-        <text x="715" y="82" text-anchor="middle" class="small">Modbus TCP</text>
-        <text x="715" y="116" text-anchor="middle" class="small">SunSpec</text>
-        <rect x="770" y="20" width="200" height="150" rx="10" fill="var(--sunk)" stroke="var(--hair)"/>
-        <text x="870" y="46" text-anchor="middle" font-weight="600">Depot devices</text>
-        <text x="790" y="76" class="small">2 × 60 kW PV inverters</text>
-        <text x="790" y="100" class="small">grid meter (SunSpec 203)</text>
-        <text x="790" y="124" class="small">4 × 22 kW chargers</text>
-        <text x="790" y="148" class="small">heat pump · 100 kWh battery</text>
-      </g>
-    </svg>
+    <div class="arch" role="img" aria-label="Architecture: DSO control centre, gateway, field devices">
+      <div class="box"><b>DSO control centre</b><span>SCADA · Netzleitstelle</span><span>tested with c104 / lib60870</span></div>
+      <div class="link"><span>IEC 104</span><i></i><span>TLS, client certs</span></div>
+      <div class="box core"><b>grid-edge-gateway (Rust)</b><span>iec104 — controlled station, sans-IO link layer</span><span>planner — MPC: 24 h convex QP every 15 min</span><span>control — safety layer: DE/AT/CH rules, allocation</span><span>field — SunSpec discovery, watchdogs, reconnect</span><span>api — JSON / WebSocket for this dashboard</span></div>
+      <div class="link"><span>Modbus TCP</span><i></i><span>SunSpec</span></div>
+      <div class="box"><b>Depot devices</b><span>2 × 60 kW PV inverters</span><span>grid meter (SunSpec 203)</span><span>4 × 22 kW chargers</span><span>heat pump · 100 kWh battery</span></div>
+    </div>
     <div class="cols" style="margin-top:14px" data-block="howCols">
       <div><h3>Towards the DSO</h3><p>The gateway is an IEC 60870-5-104 controlled station, the protocol German DSOs require for telecontrol of plants from 100 kW. Commands are confirmed (or refused with a negative confirmation), measurements go out spontaneously with time tags, and the link runs over TLS with client certificates in the spirit of IEC 62351-3. The protocol stack is written from scratch and tested against lib60870.</p></div>
       <div><h3>Two layers of control</h3><p>A planner (MPC) looks 24 hours ahead every 15 minutes and schedules battery, cars and heat pump against prices, the demand charge, departures, comfort and battery ageing. Underneath, a real-time safety layer runs every second and follows the plan only as far as the rules allow: the consumption floor, feed-in limits, the 6 A car minimum and departure deadlines never depend on the plan being right.</p></div>

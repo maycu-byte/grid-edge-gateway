@@ -347,6 +347,9 @@ Object.assign(KEYS.de, {
 Object.assign(UI.pt, { "or any day:": "ou qualquer dia:" });
 Object.assign(UI.de, { "or any day:": "oder beliebiger Tag:" });
 
+Object.assign(T.en, { restartDay: "The day is over: press to start it again" });
+Object.assign(T.pt, { restartDay: "O dia terminou: clique para recomeçar" });
+Object.assign(T.de, { restartDay: "Der Tag ist vorbei: klicken, um neu zu starten" });
 Object.assign(T.en, { yCompare: (o, n, r) => o === "mpc"
   ? `<b>With the planner</b>, the same year: ${n} evenings over the transformer, ${r} of them overloaded again by the rebound.`
   : `<b>With rules only</b>, the same year: ${n} evenings over the transformer, ${r} of them overloaded again by the rebound.` });

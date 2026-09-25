@@ -102,11 +102,18 @@ function start(hour, opts = {}) {
   press("#strategy-seg", strategy);
   countryTexts();
   $("#log").replaceChildren();
-  playing = true;
-  $("#play").textContent = "❚❚";
-  $("#play").setAttribute("aria-label", "Pause");
+  setPlaying(true);
   tick(0);
   fitCharts();
+}
+
+// Play, pause, or — once the day is over — start again.
+function setPlaying(on) {
+  playing = on;
+  const over = demo && demo.time_s() >= X1 * 3600;
+  $("#play").textContent = on ? "❚❚" : over ? "↺" : "▶";
+  $("#play").setAttribute("aria-label", on ? "Pause" : over ? "Restart the day" : "Play");
+  $("#play").title = over && !on ? L.restartDay : "";
 }
 
 function press(sel, v) {
@@ -138,9 +145,9 @@ function wire() {
   onSeg("#speed-seg", (v) => { speed = Number(v); press("#speed-seg", v); });
   onSeg("#scene-seg", (v) => start(Number(v)));
   $("#play").addEventListener("click", () => {
-    playing = !playing;
-    $("#play").textContent = playing ? "❚❚" : "▶";
-    $("#play").setAttribute("aria-label", playing ? "Pause" : "Play");
+    // at the end of the simulated day, play starts the day again
+    if (demo.time_s() >= X1 * 3600) { start(X0); return; }
+    setPlaying(!playing);
   });
   $("#faults").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
@@ -163,7 +170,7 @@ function loop(ts) {
   const dt = lastFrameT == null ? 0 : Math.min(0.1, (ts - lastFrameT) / 1000);
   lastFrameT = ts;
   if (playing) {
-    if (demo.time_s() >= X1 * 3600) { playing = false; $("#play").textContent = "▶"; }
+    if (demo.time_s() >= X1 * 3600) setPlaying(false);
     else tick(dt * speed);
   }
   animTick(dt);
@@ -561,7 +568,7 @@ function scripted() {
     }
     tick(60);
   }
-  if (q.has("pause")) { playing = false; $("#play").textContent = "▶"; }
+  if (q.has("pause")) setPlaying(false);
   return true;
 }
 
@@ -711,8 +718,9 @@ function showOption(r) {
 
 function setAnimPlaying(on) {
   anim.playing = on;
-  $("#c-play").textContent = on ? "❚❚" : "▶";
-  $("#c-play").setAttribute("aria-label", on ? "Pause" : "Play");
+  const over = shown && anim.pos >= shown.run.load.length - 1;
+  $("#c-play").textContent = on ? "❚❚" : over ? "↺" : "▶";
+  $("#c-play").setAttribute("aria-label", on ? "Pause" : over ? "Restart the evening" : "Play");
 }
 
 function animTick(dt) {
