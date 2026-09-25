@@ -10,6 +10,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -658,3 +659,128 @@ def test_plain_tcp_client_cannot_talk_to_a_tls_station(tls_site):
     with socket.create_connection(("127.0.0.1", tls_site.iec), timeout=5) as s:
         s.sendall(STARTDT_ACT)
         assert STARTDT_CON not in read_apdus(s, lambda f: STARTDT_CON in f, 3)
+
+
+# --- the FNN control box: relay contact and EEBUS LPC -------------------------
+
+
+class IoModule:
+    """A Modbus TCP I/O module with one discrete input (function 02), the
+    contact an FNN control box closes to demand a reduction."""
+
+    def __init__(self):
+        self.contact = False
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen()
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._client, args=(conn,), daemon=True).start()
+
+    def _client(self, conn):
+        with conn:
+            try:
+                while True:
+                    req = b""
+                    while len(req) < 12:
+                        chunk = conn.recv(12 - len(req))
+                        if not chunk:
+                            return
+                        req += chunk
+                    assert req[7] == 0x02
+                    conn.sendall(req[:2] + bytes([0, 0, 0, 4, req[6], 0x02, 1, int(self.contact)]))
+            except OSError:
+                return  # the gateway closed the connection
+
+    def close(self):
+        self.sock.close()
+
+
+class FakeBridge:
+    """Stands in for eebus-bridge: one JSON line per second to the gateway."""
+
+    def __init__(self, port):
+        self.port = port
+        self.message = {"active": False, "limit_w": None, "failsafe": False, "failsafe_limit_w": 6000}
+        self.running = True
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while self.running:
+            try:
+                with socket.create_connection(("127.0.0.1", self.port), timeout=2) as s:
+                    while self.running:
+                        s.sendall((json.dumps(self.message) + "\n").encode())
+                        time.sleep(0.5)
+            except OSError:
+                time.sleep(0.2)
+
+    def stop(self):
+        self.running = False
+
+
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def test_control_box_relay_dims_to_pmin(tmp_path):
+    io = IoModule()
+    s = Site(tmp_path, tls=False, extra=f'\n[control_box_relay]\naddress = "127.0.0.1:{io.port}"\ninput = 0\ndebounce_ms = 200\n')
+    try:
+        s.start_sim()
+        s.start_gateway()
+        assert s.snapshot()["inputs"]["relay"] == {"active": False, "readable": True}
+        io.contact = True
+        assert wait_until(lambda: s.snapshot()["mode"] == "dimmed", 5)
+        snap = s.snapshot()
+        assert snap["dso"]["sources"] == ["relay"] and snap["dso"]["limit_kw"] is None
+        assert snap["floor_kw"] == pytest.approx(PMIN_DEPOT, abs=0.01)
+        assert wait_until(lambda: s.snapshot()["steuve_grid_kw"] <= PMIN_DEPOT, 8)
+        io.contact = False
+        assert wait_until(lambda: s.snapshot()["mode"] != "dimmed", 5)
+    finally:
+        s.close()
+        io.close()
+
+
+def test_eebus_limit_sets_the_floor_and_a_lost_bridge_goes_failsafe(tmp_path):
+    port = free_port()
+    bridge = FakeBridge(port)
+    s = Site(tmp_path, tls=False, extra=f'\n[eebus]\nbind = "127.0.0.1:{port}"\ntimeout_s = 2\n')
+    try:
+        s.start_sim()
+        s.start_gateway()
+        assert s.snapshot()["mode"] == "normal"
+
+        # A 25 kW limit for the connection: above Pmin, so it is the floor.
+        bridge.message = {"active": True, "limit_w": 25000, "failsafe": False, "failsafe_limit_w": 6000}
+        assert wait_until(lambda: s.snapshot()["mode"] == "dimmed", 5)
+        snap = s.snapshot()
+        assert snap["dso"]["sources"] == ["eebus"] and snap["dso"]["limit_kw"] == pytest.approx(25.0)
+        assert snap["floor_kw"] == pytest.approx(25.0)
+        assert wait_until(lambda: s.snapshot()["steuve_grid_kw"] <= 25.0, 8)
+
+        # 4.2 kW is below the depot's Pmin: the floor stays at Pmin.
+        bridge.message = {"active": True, "limit_w": 4200, "failsafe": False, "failsafe_limit_w": 6000}
+        assert wait_until(lambda: s.snapshot()["floor_kw"] == pytest.approx(PMIN_DEPOT, abs=0.01), 5)
+
+        # The bridge dies: failsafe with the last failsafe limit (6 kW, so Pmin again).
+        bridge.message = {"active": False, "limit_w": None, "failsafe": False, "failsafe_limit_w": 6000}
+        assert wait_until(lambda: s.snapshot()["mode"] != "dimmed", 5)
+        bridge.stop()
+        assert wait_until(lambda: "eebus bridge lost" in s.snapshot()["fallbacks"], 8)
+        snap = s.snapshot()
+        assert snap["mode"] == "dimmed" and snap["inputs"]["eebus"]["failsafe"] is True
+        assert snap["floor_kw"] == pytest.approx(PMIN_DEPOT, abs=0.01)
+    finally:
+        bridge.stop()
+        s.close()

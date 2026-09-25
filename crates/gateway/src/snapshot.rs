@@ -45,6 +45,8 @@ pub struct Snapshot {
     pub cycle_ms: f64,
     /// The planning layer, when it is on.
     pub planner: Option<crate::ems::PlannerView>,
+    /// The FNN control box's relay and EEBUS LPC, when configured.
+    pub inputs: crate::inputs::InputState,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -53,6 +55,10 @@ pub struct DsoView {
     pub feed_in_limit_pct: f64,
     pub emergency: bool,
     pub connections: usize,
+    /// Consumption limit sent with the dimming (EEBUS LPC), kW.
+    pub limit_kw: Option<f64>,
+    /// Which sources demand the reduction: "iec104", "relay", "eebus".
+    pub sources: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

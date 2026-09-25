@@ -30,6 +30,23 @@ jobs:
             target/debug/gateway
             target/debug/site-sim
 
+  eebus-bridge:
+    name: EEBUS bridge (Go, eebus-go) and LPC against eebus-go's energy guard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: eebus-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: eebus-bridge/go.mod
+          cache-dependency-path: eebus-bridge/go.sum
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet -tags e2e ./...
+      - run: go test ./...
+      - run: go test -tags e2e -run TestEnergyGuard -v ./...
+
   interop:
     name: Interoperability — c104 (lib60870) as control centre
     needs: rust

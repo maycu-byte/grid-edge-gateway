@@ -86,6 +86,23 @@ link_loss_release_s = 900
 # key = "certs/demo/station.key.pem"
 # client_ca = "certs/demo/ca.pem"
 
+# The FNN control box, the way §14a reaches most German sites. Either input
+# can run next to IEC 104; any source that demands a reduction dims.
+#
+# Its relay contact, wired to a Modbus TCP I/O module (discrete input, fc 02):
+# [control_box_relay]
+# address = "192.168.1.60:502"
+# input = 0                # discrete input number, from 0
+# active_when = "closed"   # or "open"
+# debounce_ms = 500
+# on_input_loss = "hold"   # or "dim": what an unreadable module means
+# input_loss_s = 5
+#
+# EEBUS LPC, through eebus-bridge/ (Go, eebus-go) on this machine:
+# [eebus]
+# bind = "127.0.0.1:4712"  # loopback only
+# timeout_s = 15           # a silent bridge means failsafe
+
 [api]
 bind = "127.0.0.1:8080"
 web_root = "web"

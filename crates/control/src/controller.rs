@@ -173,11 +173,15 @@ pub struct DsoCommands {
     /// Immediate, serious threat to grid operation (CH StromVG 17c 4b): the
     /// DSO's commands apply regardless of day limits, budgets and opt-outs.
     pub emergency: bool,
+    /// Consumption limit sent with the dimming, kW (EEBUS LPC). The floor
+    /// while dimmed is this value, but never below the legal minimum
+    /// (Pmin,14a in DE): `None` dims to that minimum.
+    pub limit_kw: Option<f64>,
 }
 
 impl Default for DsoCommands {
     fn default() -> Self {
-        DsoCommands { dim: false, feed_in_limit_pct: 100.0, emergency: false }
+        DsoCommands { dim: false, feed_in_limit_pct: 100.0, emergency: false, limit_kw: None }
     }
 }
 
@@ -446,9 +450,16 @@ impl Controller {
         self.floor_kw
     }
 
+    /// The floor for these commands: the limit sent with them, never below
+    /// the legal minimum.
+    pub fn floor_for(&self, cmd: &DsoCommands) -> f64 {
+        cmd.limit_kw.filter(|l| l.is_finite()).map_or(self.floor_kw, |l| l.max(self.floor_kw))
+    }
+
     /// One control cycle.
     pub fn step(&mut self, clock: &Clock, cmd: &DsoCommands, r: &Readings) -> (Setpoints, Status) {
         let t_s = clock.t_s;
+        let floor_kw = self.floor_for(cmd);
         let dt = self.last_t.map_or(0.0, |l| (t_s - l).clamp(0.0, 10.0));
         self.last_t = Some(t_s);
         let mut fallbacks = Vec::new();
@@ -547,7 +558,7 @@ impl Controller {
             mode = Mode::Dimmed;
             self.release = None;
             // Without a meter we cannot see PV surplus: grant only the floor.
-            self.floor_kw + held_surplus.unwrap_or(0.0) - cfg.margin_kw
+            floor_kw + held_surplus.unwrap_or(0.0) - cfg.margin_kw
         } else {
             if self.was_dimmed {
                 // The ramp starts after a random wait (0 when switched off).
@@ -597,6 +608,7 @@ impl Controller {
             grid_kw,
             battery_kw,
             dim || mode == Mode::Releasing,
+            floor_kw,
             base_load,
             pv_kw,
             loads_kw,
@@ -683,7 +695,7 @@ impl Controller {
         let status = Status {
             mode,
             release_wait_s,
-            floor_kw: self.floor_kw,
+            floor_kw,
             steuve_budget_kw: budget.is_finite().then_some(budget.max(0.0)),
             steuve_kw,
             steuve_grid_kw: pv_surplus.map(|s| (steuve_kw - s - battery_kw.min(0.0).abs()).max(0.0)),
@@ -749,6 +761,7 @@ impl Controller {
         grid_kw: Option<f64>,
         battery_now_kw: f64,
         constrained: bool,
+        floor_kw: f64,
         base_load: Option<f64>,
         pv_kw: Option<f64>,
         loads_kw: f64,
@@ -783,7 +796,7 @@ impl Controller {
                 // Import the site would have while dimmed ≈ base load − PV + a
                 // floor's worth of loads; cover as much as the battery can.
                 let base_minus_pv = base_load.zip(pv_ref).map_or(0.0, |(b, pv)| b - pv);
-                -(base_minus_pv + self.floor_kw).max(0.0)
+                -(base_minus_pv + floor_kw).max(0.0)
             }
             _ => {
                 let net = unconstrained.unwrap_or(grid_idle);

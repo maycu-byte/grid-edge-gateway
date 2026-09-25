@@ -9,6 +9,7 @@ mod config;
 mod dso;
 mod ems;
 mod field;
+mod inputs;
 mod market;
 mod persist;
 mod readings;
@@ -125,6 +126,15 @@ async fn main() {
 
     field::spawn_all(&cfg, field.clone(), setpoints_rx, period);
 
+    // The FNN control box's relay and EEBUS LPC, next to IEC 104
+    let input_state: inputs::Shared = Arc::default();
+    if let Some(r) = cfg.control_box_relay.clone() {
+        inputs::spawn_relay(r, input_state.clone());
+    }
+    if let Some(e) = cfg.eebus.clone() {
+        inputs::spawn_eebus(e, input_state.clone()).await;
+    }
+
     // DSO link
     let station = dso::Station {
         common_address: cfg.iec104.common_address,
@@ -183,7 +193,10 @@ async fn main() {
             }
         }
 
-        let cmd = *commands.borrow();
+        // IEC 104 alone is what survives a restart; the inputs are read anew.
+        let dso_cmd = *commands.borrow();
+        let inputs_now = input_state.lock().unwrap().clone();
+        let cmd = inputs::merge(dso_cmd, &inputs_now);
         let (readings, views) = readings::collect(&field.lock().unwrap(), stale);
         let now = now_ms();
         let clock = Clock {
@@ -221,9 +234,9 @@ async fn main() {
             }
             last_refusals = st.refusals.clone();
         }
-        if cmd != last_commands || last_persist.elapsed() > PERSIST_EVERY {
-            persist::save(&state_file, &cmd, &st.totals);
-            last_commands = cmd;
+        if dso_cmd != last_commands || last_persist.elapsed() > PERSIST_EVERY {
+            persist::save(&state_file, &dso_cmd, &st.totals);
+            last_commands = dso_cmd;
             last_persist = Instant::now();
         }
 
@@ -252,6 +265,8 @@ async fn main() {
                 feed_in_limit_pct: cmd.feed_in_limit_pct,
                 emergency: cmd.emergency,
                 connections: connections.load(Ordering::SeqCst),
+                limit_kw: cmd.limit_kw,
+                sources: inputs::sources(&dso_cmd, &inputs_now),
             },
             mode: match st.mode {
                 Mode::Normal => "normal",
@@ -283,7 +298,8 @@ async fn main() {
                 curtailment_budget_used_pct: st.curtailment_budget_used_pct,
             },
             refusals: st.refusals.iter().map(readings::refusal_name).collect(),
-            fallbacks: st.fallbacks.iter().map(readings::fallback_name).collect(),
+            fallbacks: st.fallbacks.iter().map(readings::fallback_name).chain(inputs::fallbacks(&inputs_now)).collect(),
+            inputs: inputs_now,
             reports_written,
             last_report_verdict,
             cycle_ms,

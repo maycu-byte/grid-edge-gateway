@@ -32,6 +32,8 @@ Distribution grids in Central Europe now have to control what happens behind the
 | **Austria** | No statutory minimum like §14a was found in the sources checked; modelled as a flexibility contract | *Spitzenkappung*: the DSO may cap feed-in of new or extended PV at up to 70% of module peak power; a dynamic version is planned for 2028 | ElWG (BGBl. I 91/2025); [BMWET factsheet](https://www.bmwet.gv.at/dam/jcr:260fda60-c745-4861-bdcb-1c1223a4af58/ElWG-Factsheets_Spitzenkappung_final%20final.pdf) |
 | **Switzerland** | Flexibility is used by contract, with pay; the owner may forbid uses that existed before 2026 | Guaranteed, unpaid curtailment of **at most 3% of the yearly energy** at the connection point; unlimited in an immediate, serious threat | [StromVG Art. 17c](https://www.fedlex.admin.ch/eli/cc/2007/418/de), StromVV Art. 19a–19d (in force 1 Jan 2026) |
 
+**What the public data shows (September 2026).** 264,874 sites with heat pumps, chargers or batteries already fell under the new §14a rules by the end of 2024, their first year (Bundesnetzagentur monitoring report 2025). But the platform where operators must publish every dimming, VNBdigital, lists none yet. The obligation and the devices are measured; the dimmings themselves, and the evening rebound they could cause, are not yet visible in public data. Details and sources: [docs/field-evidence.md](docs/field-evidence.md).
+
 The box on site has to speak the DSO's protocol on one side and the devices' protocols on the other, apply the right country's rules, and stay safe when a link, a device or the box itself fails. This project builds that box, with one controller and three rule sets.
 
 ## The demo site
@@ -47,6 +49,7 @@ DSO control centre ──IEC 104 / TLS──► grid-edge-gateway ──Modbus T
 
 | | |
 |---|---|
+| **Three ways in for the DSO** | **IEC 104** (the telecontrol path for larger plants); the **relay contact of an FNN control box**, read through a Modbus TCP I/O module with debouncing and a set behaviour when the module is lost; and **EEBUS LPC** from the control box, through [`eebus-bridge`](eebus-bridge) on eebus-go. Any source that demands a reduction dims. A plain reduction (IEC 104, relay) dims to Pmin,14a; an LPC limit alone is used as the floor, but never below Pmin,14a. A lost EEBUS link applies the failsafe limit, as LPC prescribes. The API shows which sources are active. |
 | **Consumption dimming** | **DE:** Pmin,14a exactly as in BK6-22-300 Anlage 1, 4.5.2: `max(0.4·ΣP_WP, 0.4·ΣP_Klima) + (n−1)·GZF·4.2 kW` with a heat pump above 11 kW, else `4.2 kW + (n−1)·GZF·4.2 kW`. For the depot (n = 6: four chargers, the battery, the heat pump; GZF 0.6): **18.2 kW**. **AT/CH:** the contract's minimum power and maximum minutes per day; devices whose owner opted out (CH) are never limited. In both cases the limit applies to power *drawn from the grid*, so PV surplus and battery discharge come on top. |
 | **Allocation** | Each heat pump first gets 40% of its rating. Then as many cars as fit get the IEC 61851 minimum of 6 A: the car with the least slack before its departure first (time left minus time to charge at the car's own maximum current, as ISO 15118 reports it), then the least-charged. What is left tops up the heat pump, then the cars in whole amps. Values are always rounded *down*: when the exact value is impossible, the regulation asks for the next lower one. Cars are only rotated after a 5-minute dwell time. |
 | **Feed-in limits** | The DSO setpoint, capped by the country's standing limit (AT 70%, DE 60% where it applies), applied at the grid connection: PV may produce more while the site consumes or stores it. In CH the gateway counts curtailed energy against the 3% budget and refuses non-emergency curtailment beyond it. |
@@ -155,12 +158,13 @@ Without prices, or with a plan older than an hour, the site runs on rules alone.
 | [`closedloop`](crates/closedloop) | The simulated depot, the register adapter, the real-time controller and the planner with its forecaster, wired into one loop; and the [`study`](crates/closedloop/src/bin/study.rs) binary, a Monte Carlo comparison of the strategies. |
 | [`devices`](crates/devices) | SunSpec register layouts (models 1, 103, 120, 123, 203 and a vendor model), typical wallbox, heat-pump and battery maps with watchdogs, and a deterministic simulation of the depot over several days: PV under random cloudiness, the building's heat balance, battery losses, a van fleet with arrival and departure times, and real German day-ahead prices for a spring and a winter day. |
 | [`gateway`](crates/gateway) | The binary: one supervised task per Modbus device (SunSpec discovery by walking the model chain, reconnect, staleness detection), a 1 s control loop, the IEC 104 station, TLS (rustls), persistence, the compliance reports on disk and a read-only JSON/WebSocket API. The planning layer's live feeds are here too: ENTSO-E and Energy-Charts day-ahead prices, and the Open-Meteo forecast. |
+| [`eebus-bridge`](eebus-bridge) | Go, on [eebus-go](https://github.com/enbility/eebus-go): the Controllable System of EEBUS LPC. It pairs with the control box, approves its limits, keeps the heartbeat and failsafe rules and passes the limit in force to the gateway over a local socket. |
 | [`site-sim`](crates/site-sim) | Every device of the depot as its own Modbus TCP server, with an HTTP endpoint to take devices offline. With `--start now`, its sun is at today's hour, for runs against live prices and weather. |
 | [`web-demo`](crates/web-demo) | The browser build: the closed loop (planner included) + IEC 104 encoder in WebAssembly, with a rules-only copy of the site alongside for comparison. The controller reads and writes the simulated devices through their register maps, like the gateway does over Modbus TCP. |
 
 ## Testing
 
-- **159 Rust tests.** They cover:
+- **169 Rust tests.** They cover:
   - protocol frames checked against reference octets, every link-layer timer and window, sequence-number wrap-around;
   - the Pmin formula for several device mixes, allocation scenarios, each country's rules, day and year roll-over of the totals, the battery, plausibility checks, ramps and config validation;
   - three property tests over 45,000 random site states and plans. While dimmed, in every country, with a battery and whatever the plan says, the loads never get more than the floor + PV surplus + battery discharge. Every charger current is 0 or 6–32 A in whole amps;
@@ -174,14 +178,17 @@ Without prices, or with a plan older than an hour, the site runs on rules alone.
     - billing-peak metering and restarts;
     - Central European summer time;
   - the checks around a command: the random wait before power returns, an inverter that ignores its limit (reported after the timeout, the other one makes up for it), and the compliance reports (verdicts, the SHA-256 chain, a forged value breaking it, the chain continuing after a restart, file names that cannot escape the report folder);
+  - the control box inputs: how IEC 104, the relay and an LPC limit combine, contact debouncing, a relay read from a Modbus I/O module and lost, the bridge's messages checked, and a silent bridge leading to the failsafe limit; the LPC limit raising the floor but never taking it below Pmin;
   - the site simulation: register maps and watchdogs, the thermostat and an EMS taking it over (with the heat pump's own comfort guard), departures and unmet energy, day-to-day weather, prices in local time.
-- **20 interoperability tests** ([`interop/`](interop/test_interop.py)). They start the real simulator and gateway and drive them with [c104](https://github.com/Fraunhofer-FIT-DIEN/iec104-python), a Python binding of lib60870, as the DSO control centre. They cover:
+- **6 Go tests** of the EEBUS bridge: the LPC state machine (limit duration, failsafe after a missing or lost heartbeat, leaving it) and an **end-to-end EEBUS session**: an energy guard built on eebus-go's own LPC client pairs with the bridge over SHIP (mDNS, TLS), writes a 7,000 W limit, and the limit reaches the gateway's socket.
+- **22 interoperability tests** ([`interop/`](interop/test_interop.py)). They start the real simulator and gateway and drive them with [c104](https://github.com/Fraunhofer-FIT-DIEN/iec104-python), a Python binding of lib60870, as the DSO control centre. They cover:
   - general interrogation, §14a compliance within seconds, gradual release and negative confirmations;
   - meter loss, a battery gone silent, the emergency command and the link-loss policy;
   - persistence across a restart, the Austrian 70% cap and the Swiss 3% budget running out;
   - the planner in the running gateway: it moves the overnight vans' charging to cheap hours, and the Pmin floor holds when the DSO dims;
   - two dimmings leaving two chained reports on disk and at `/api/reports`, and an inverter that ignores its limit being reported over IEC 104;
-  - TLS acceptance and rejection.
+  - TLS acceptance and rejection;
+  - the FNN control box: a relay contact on a simulated Modbus I/O module dims the running gateway to Pmin; an LPC limit of 25 kW becomes the floor, one of 4.2 kW does not go below Pmin, and a bridge that goes silent leads to the failsafe state.
 - **107 browser checks** of the live page with Playwright, in English, Portuguese and German at 1366 px, 1920 px (dark mode) and 390 px: nothing left untranslated, no horizontal scroll, the calculator's output and its minute-by-minute playback (clock, one square per site, time slider), the height difference between side-by-side columns, switching language while the demo runs, any day of 2025 in the demo and the calculator, the year calendar (365 days, transformer sizes, the planner view, a day's evening, opening it in the calculator), a user's session in the live demo (play, pause, keyboard, every extreme day and country, running to the end of the day and starting it again), the architecture diagram's text staying inside its boxes, no console errors. They were run by hand for this version; CI does not run them yet.
 - CI runs `fmt`, `clippy -D warnings`, all tests and the interop suite on every push, then builds the WebAssembly demo and deploys it to GitHub Pages.
 
@@ -203,6 +210,8 @@ pip install -r interop/requirements.txt
 sh certs/gen-demo.sh                           # throw-away PKI for the TLS tests
 python -m pytest -v interop
 ```
+
+The FNN control box: uncomment `[control_box_relay]` (an I/O module with the box's contact) or `[eebus]` in `gateway.toml`; for EEBUS, run [`eebus-bridge`](eebus-bridge) next to the gateway (needs Go 1.22+).
 
 To enable TLS, uncomment `[iec104.tls]` in `gateway.toml`. For the browser demo, run `web/build.sh`, which needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` 0.2.128.
 
@@ -252,21 +261,22 @@ In a German home, the hardware towards the DSO is already mandated and price-cap
 
 Open-source energy managers such as [evcc](https://docs.evcc.io/en/external-limit/) already take the control box's signal over a relay or EEBUS LPC. This project explores the parts around that signal: Pmin,14a with the simultaneity factor for several devices, gradual release, proof of each dimming, and a predictive planner.
 
-A review against the regulation found five gaps, in order of value. Three are closed:
+A review against the regulation found five gaps, in order of value. Four are closed:
 
 | Gap | Why it matters | Status |
 |---|---|---|
 | **A report of each dimming.** | The site operator must be able to show the DSO, case by case, that each reduction was carried out, and keep that for 2 years ([BK6-22-300 Anlage 1](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK6-GZ/2022/BK6-22-300/Beschluss/BK6-22-300_Beschluss_Anlage1.pdf?__blob=publicationFile&v=1), 7.2–7.3, since March 2025). | Done: a CSV per dimming, chained by SHA-256. The chain shows tampering but proves nothing about who wrote it; a real device would sign with a key in a secure element. |
 | **An inverter that ignores its limit.** | A silent failure otherwise. The operator must keep devices controllable at all times (Anlage 1, 4.6). | Done: reported (point 2008), the others make up for it. |
 | **A random wait before the release ramp.** | Without it, every site that ends a dimming at the same moment ramps up together: a second peak in the neighbourhood. The UK requires up to 600 s ([SI 2021/1467](https://www.legislation.gov.uk/uksi/2021/1467/part/2/made)). | Done, off by default in the gateway (`release_delay_max_s`); on in the demo. |
-| **An EEBUS LPC interface.** | EEBUS LPC is how German households receive §14a behind an FNN control box. DSO commands arrive only over IEC 104 here. | Open. |
+| **An EEBUS LPC interface.** | EEBUS LPC is how German households receive §14a behind an FNN control box. | Done, with the control box's relay contact as well: [`eebus-bridge`](eebus-bridge) (eebus-go), tested in a real EEBUS session against eebus-go's energy guard. Not yet tested against a certified FNN control box. |
 | **Re-planning on forecast error.** | A sudden drop in PV is absorbed by the real-time layer but does not trigger a new plan, which stays suboptimal until the next quarter-hour. | Open. |
 
 ## Limits and honest notes
 
 - **Rules, not legal advice.** The country rules are taken from the texts linked above as of September 2026. The Austrian rules were read from the ministry's factsheet and secondary sources, because the official legal database blocks automated access; no Austrian consumption-side minimum was found. DSOs' technical connection rules add details not modelled here.
 - **Simulated devices.** The wallbox, battery and heat-pump register maps follow common patterns but are not a specific product's map; the available-power register is a vendor model, as on real inverters. SunSpec layouts follow the published models.
-- **Signal path.** In German households the §14a signal usually travels through the smart meter gateway (CLS channel) to an FNN control box or via EEBUS. IEC 104 is the standard telecontrol path for larger plants (from 100 kW). This project uses IEC 104 for all commands to keep one DSO interface; the control logic does not depend on the transport.
+- **Signal path.** In German households the §14a signal usually travels through the smart meter gateway (CLS channel) to an FNN control box, which passes it on by relay contact or EEBUS. The gateway takes all three: IEC 104 (the telecontrol path for larger plants, from 100 kW), the relay and EEBUS LPC. The control logic does not depend on the transport.
+- **Not tested in the field.** Every test runs against simulated devices, a simulated I/O module and eebus-go on both EEBUS ends. The next step needs hardware in Germany: an FNN control box, a smart meter gateway and a real site. It needs a partner there; the author works from Brazil.
 - **Protocol scope.** The IEC 104 stack implements the subset a controlled station of this kind needs, not the full companion standard (no file transfer, no redundancy groups). It is not certified; it is tested against lib60870.
 - **Clock.** Day and year boundaries for the running totals use UTC.
 - **Live planning is simple where it can be.**

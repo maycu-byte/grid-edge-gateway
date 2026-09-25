@@ -25,7 +25,7 @@ fn dimming_at_night_keeps_grid_draw_of_steuve_under_pmin() {
     let mut c = Controller::new(depot());
     let cars = [true; 4];
     let r = readings(20.0, 0.0, cars, &[32.0; 4], 14.0, 14.0);
-    let dim = DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false };
+    let dim = DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false, limit_kw: None };
     let (s, st) = c.step(&clock(0.0), &dim, &r);
 
     // Budget 16.52 - 0.3 = 16.22 kW:
@@ -38,12 +38,31 @@ fn dimming_at_night_keeps_grid_draw_of_steuve_under_pmin() {
 }
 
 #[test]
+fn a_limit_sent_with_the_dimming_raises_the_floor_but_never_lowers_it() {
+    let r = readings(20.0, 0.0, [true; 4], &[32.0; 4], 14.0, 14.0);
+    let lpc = |kw| DsoCommands { dim: true, limit_kw: Some(kw), ..Default::default() };
+
+    // EEBUS LPC sends 25 kW for the connection: more than Pmin (16.52 kW).
+    let mut c = Controller::new(depot());
+    let (_, st) = c.step(&clock(0.0), &lpc(25.0), &r);
+    assert!((st.floor_kw - 25.0).abs() < 1e-9);
+    assert!((st.steuve_budget_kw.unwrap() - 24.7).abs() < 1e-9);
+
+    // A limit under Pmin is not allowed under §14a: the floor stays at Pmin.
+    let mut c = Controller::new(depot());
+    let (_, st) = c.step(&clock(0.0), &lpc(4.2), &r);
+    assert!((st.floor_kw - 16.52).abs() < 1e-9);
+    assert!((st.steuve_budget_kw.unwrap() - 16.22).abs() < 1e-9);
+}
+
+#[test]
 fn pv_surplus_can_be_used_on_top_of_pmin() {
     let mut c = Controller::new(depot());
     let cars = [true; 4];
     // 60 kW PV, 20 kW base load: 40 kW surplus, budget 56.22 kW
     let r = readings(20.0, 60.0, cars, &[32.0; 4], 14.0, 14.0);
-    let (s, st) = c.step(&clock(0.0), &DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false }, &r);
+    let (s, st) =
+        c.step(&clock(0.0), &DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false, limit_kw: None }, &r);
     assert!((st.steuve_budget_kw.unwrap() - 56.22).abs() < 1e-9);
     assert_eq!(s.heat_pump_limit_kw, [14.0]);
     // 42.22 kW left for cars = 61.2 A: 4 cars, 15 A each (whole amps, rounded down)
@@ -55,7 +74,7 @@ fn pv_surplus_can_be_used_on_top_of_pmin() {
 fn release_is_gradual() {
     let mut c = Controller::new(depot());
     let cars = [true; 4];
-    let dim = DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false };
+    let dim = DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false, limit_kw: None };
     let r = readings(20.0, 0.0, cars, &[6.0, 6.0, 0.0, 0.0], 7.94, 14.0);
     c.step(&clock(0.0), &dim, &r);
     let (_, st) = c.step(&clock(10.0), &DsoCommands::default(), &r);
@@ -75,7 +94,8 @@ fn offline_charger_is_counted_at_its_failsafe_current() {
     let cars = [true; 4];
     let mut r = readings(20.0, 0.0, cars, &[32.0; 4], 14.0, 14.0);
     r.chargers[3].online = false;
-    let (s, st) = c.step(&clock(0.0), &DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false }, &r);
+    let (s, st) =
+        c.step(&clock(0.0), &DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false, limit_kw: None }, &r);
     assert!(st.fallbacks.contains(&Fallback::ChargerOffline(3)));
     // 16.22 - 4.14 reserve = 12.08: heat pump 5.6, one car 4.14, rest to heat pump
     assert_eq!(s.charger_current_a[..3], [6.0, 0.0, 0.0]);
@@ -87,7 +107,8 @@ fn without_a_meter_dimming_grants_only_pmin_and_feed_in_limit_is_plant_based() {
     let mut c = Controller::new(depot());
     let mut r = readings(20.0, 60.0, [true; 4], &[32.0; 4], 14.0, 14.0);
     r.grid_kw = None;
-    let (s, st) = c.step(&clock(0.0), &DsoCommands { dim: true, feed_in_limit_pct: 60.0, emergency: false }, &r);
+    let (s, st) =
+        c.step(&clock(0.0), &DsoCommands { dim: true, feed_in_limit_pct: 60.0, emergency: false, limit_kw: None }, &r);
     assert!(st.fallbacks.contains(&Fallback::MeterOffline));
     assert!((st.steuve_budget_kw.unwrap() - 16.22).abs() < 1e-9);
     assert_eq!(s.pv_limit_pct, 60.0);
@@ -98,20 +119,22 @@ fn feed_in_limit_at_the_grid_point_lets_the_site_use_more_pv() {
     let mut c = Controller::new(depot());
     // 100 kW PV, 60% limit = 72 kW export allowed. Site consumes 20 base + 88.32 cars + 14 hp.
     let r = readings(20.0, 100.0, [true; 4], &[32.0; 4], 14.0, 14.0);
-    let (s, st) = c.step(&clock(0.0), &DsoCommands { dim: false, feed_in_limit_pct: 60.0, emergency: false }, &r);
+    let (s, st) =
+        c.step(&clock(0.0), &DsoCommands { dim: false, feed_in_limit_pct: 60.0, emergency: false, limit_kw: None }, &r);
     assert_eq!(st.allowed_export_kw, 72.0);
     assert_eq!(s.pv_limit_pct, 100.0, "consumption absorbs everything above 72 kW");
 
     // Empty depot: only 20 kW base load -> PV may produce 72 + 20 - 0.3 kW.
     let r = readings(20.0, 100.0, [false; 4], &[0.0; 4], 0.0, 0.0);
-    let (s, _) = c.step(&clock(1.0), &DsoCommands { dim: false, feed_in_limit_pct: 60.0, emergency: false }, &r);
+    let (s, _) =
+        c.step(&clock(1.0), &DsoCommands { dim: false, feed_in_limit_pct: 60.0, emergency: false, limit_kw: None }, &r);
     assert!((s.pv_limit_pct - 91.7 / 1.2).abs() < 1e-9, "{}", s.pv_limit_pct);
 
     let mut plant = depot();
     plant.feed_in_reference = FeedInReference::PlantOutput;
     let (s, _) = Controller::new(plant).step(
         &clock(0.0),
-        &DsoCommands { dim: false, feed_in_limit_pct: 60.0, emergency: false },
+        &DsoCommands { dim: false, feed_in_limit_pct: 60.0, emergency: false, limit_kw: None },
         &r,
     );
     assert_eq!(s.pv_limit_pct, 60.0);
@@ -121,7 +144,7 @@ fn feed_in_limit_at_the_grid_point_lets_the_site_use_more_pv() {
 fn rotation_waits_for_the_dwell_time() {
     let mut c = Controller::new(depot());
     let cars = [true; 4];
-    let dim = DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false };
+    let dim = DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false, limit_kw: None };
     let mut r = readings(20.0, 0.0, cars, &[6.0, 6.0, 0.0, 0.0], 7.94, 14.0);
     let (s, _) = c.step(&clock(0.0), &dim, &r);
     assert_eq!(s.charger_current_a, [6.0, 6.0, 0.0, 0.0]);
@@ -157,7 +180,11 @@ fn dimming_invariant_holds_for_random_states() {
         if offline {
             r.chargers[0].online = false;
         }
-        let (s, st) = c.step(&clock(0.0), &DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false }, &r);
+        let (s, st) = c.step(
+            &clock(0.0),
+            &DsoCommands { dim: true, feed_in_limit_pct: 100.0, emergency: false, limit_kw: None },
+            &r,
+        );
         let budget = st.steuve_budget_kw.unwrap();
         // An offline charger's draw is invisible to the controller, so it lands in base load.
         let seen_base = base + if offline { r.chargers[0].power_kw } else { 0.0 };

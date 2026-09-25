@@ -23,6 +23,12 @@ pub struct Config {
     #[serde(rename = "battery", default)]
     pub batteries: Vec<Battery>,
     pub iec104: Iec104,
+    /// The relay contact of an FNN control box (§14a), read through a
+    /// Modbus TCP I/O module.
+    pub control_box_relay: Option<ControlBoxRelay>,
+    /// EEBUS LPC from an FNN control box or an energy guard, through
+    /// `eebus-bridge` on the same machine.
+    pub eebus: Option<Eebus>,
     pub api: Api,
     /// The planning layer (MPC); without it the site runs on rules alone.
     pub planner: Option<Planner>,
@@ -169,6 +175,56 @@ pub struct Iec104 {
     #[serde(default = "default_link_loss_s")]
     pub link_loss_release_s: u64,
     pub tls: Option<Tls>,
+}
+
+/// Contact state that means "reduce consumption".
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Contact {
+    Closed,
+    Open,
+}
+
+/// What an input that can no longer be read commands.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum InputLossPolicy {
+    /// Keep the last state it had.
+    Hold,
+    /// Reduce consumption until it can be read again.
+    Dim,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlBoxRelay {
+    /// Modbus TCP address of the I/O module the contact is wired to.
+    pub address: SocketAddr,
+    #[serde(default = "default_unit")]
+    pub unit: u8,
+    /// Discrete input (function 02), counted from 0.
+    pub input: u16,
+    #[serde(default = "default_active_when")]
+    pub active_when: Contact,
+    /// A new contact state counts once it has been stable this long.
+    #[serde(default = "default_debounce_ms")]
+    pub debounce_ms: u64,
+    #[serde(default = "default_input_loss")]
+    pub on_input_loss: InputLossPolicy,
+    /// The module counts as lost after this long without an answer.
+    #[serde(default = "default_input_loss_s")]
+    pub input_loss_s: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Eebus {
+    /// Where `eebus-bridge` connects. Loopback only: whoever reaches this
+    /// socket can dim the site.
+    pub bind: SocketAddr,
+    /// The bridge counts as lost after this long without a message.
+    #[serde(default = "default_eebus_timeout_s")]
+    pub timeout_s: u64,
 }
 
 /// IEC 62351-3 style TLS: the station presents its certificate and only
@@ -419,6 +475,21 @@ fn default_link_loss() -> LinkLossPolicy {
 fn default_link_loss_s() -> u64 {
     900
 }
+fn default_active_when() -> Contact {
+    Contact::Closed
+}
+fn default_debounce_ms() -> u64 {
+    500
+}
+fn default_input_loss() -> InputLossPolicy {
+    InputLossPolicy::Hold
+}
+fn default_input_loss_s() -> u64 {
+    5
+}
+fn default_eebus_timeout_s() -> u64 {
+    15
+}
 
 impl Config {
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
@@ -431,6 +502,16 @@ impl Config {
             return Err("control_period_ms must be ≥ 100 and stale_after_ms at least twice that".into());
         }
         cfg.site_config()?.validate()?;
+        if let Some(r) = &cfg.control_box_relay
+            && (r.debounce_ms > 10_000 || r.input_loss_s == 0)
+        {
+            return Err("[control_box_relay] debounce_ms must be ≤ 10000 and input_loss_s > 0".into());
+        }
+        if let Some(e) = &cfg.eebus
+            && (!e.bind.ip().is_loopback() || e.timeout_s == 0)
+        {
+            return Err("[eebus] bind must be a loopback address and timeout_s > 0".into());
+        }
         if let Some(p) = &cfg.planner {
             p.validate(cfg.jurisdiction()?)?;
         }
@@ -610,6 +691,48 @@ mod tests {
             load("", &PLANNER.replace("[\"17:30-19:30\"]", "[\"19:30-17:30\"]")).unwrap_err().contains("dim window")
         );
         assert!(load("", &(PLANNER.to_owned() + "billing = \"week\"\n")).unwrap_err().contains("billing"));
+    }
+
+    #[test]
+    fn control_box_inputs_are_read_and_checked() {
+        let relay = "
+[control_box_relay]
+address = \"127.0.0.1:5030\"
+input = 3
+";
+        let eebus = "
+[eebus]
+bind = \"127.0.0.1:4712\"
+";
+        let c = load("", &format!("{relay}{eebus}")).unwrap();
+        let r = c.control_box_relay.unwrap();
+        assert_eq!(
+            (r.input, r.active_when, r.on_input_loss, r.debounce_ms),
+            (3, Contact::Closed, InputLossPolicy::Hold, 500)
+        );
+        assert_eq!(c.eebus.unwrap().timeout_s, 15);
+        assert!(
+            load(
+                "",
+                "
+[eebus]
+bind = \"0.0.0.0:4712\"
+"
+            )
+            .unwrap_err()
+            .contains("loopback")
+        );
+        assert!(
+            load(
+                "",
+                &relay.replace(
+                    "input = 3",
+                    "input = 3
+debounce_ms = 60000"
+                )
+            )
+            .is_err()
+        );
     }
 
     #[test]

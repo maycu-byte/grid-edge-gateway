@@ -25,6 +25,7 @@ pub fn load(path: &Path) -> Saved {
         dim: v["dim"].as_bool().or_else(|| v["dim_14a"].as_bool()).unwrap_or(false),
         feed_in_limit_pct: v["feed_in_limit_pct"].as_f64().unwrap_or(100.0).clamp(0.0, 100.0),
         emergency: v["emergency"].as_bool().unwrap_or(false),
+        limit_kw: None,
     };
     let t = &v["totals"];
     let totals = t.is_object().then(|| Totals {
@@ -66,7 +67,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gw-persist-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("state.json");
-        let c = DsoCommands { dim: true, feed_in_limit_pct: 30.0, emergency: true };
+        let c = DsoCommands { dim: true, feed_in_limit_pct: 30.0, emergency: true, limit_kw: None };
         let t = Totals { day: 3, year: 2026, dimmed_s_today: 60.0, produced_kwh_year: 12.5, curtailed_kwh_year: 0.5 };
         save(&p, &c, &t);
         let s = load(&p);
